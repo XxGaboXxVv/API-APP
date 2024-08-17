@@ -13,13 +13,14 @@ const app = express();
 app.use(bp.json());
 
 const mysqlConnection = mysql.createConnection({
-    host: 'autorack.proxy.rlwy.net',
+    host: 'junction.proxy.rlwy.net',
     user: 'root',
-    password: 'RKBGRsBRRlqVfLkfpymVYpwSLxKZyqGS',
+    password: 'KIrqtUpHbSvuQinLjxJIVrlxFZCqqxnl',
     database: 'railway',
-    port: 23249,
+    port: 17751,
     multipleStatements: true
 });
+
 
 mysqlConnection.connect((err) => {
   if (!err) {
