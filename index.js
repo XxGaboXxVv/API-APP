@@ -13,11 +13,11 @@ const app = express();
 app.use(bp.json());
 
 const mysqlConnection = mysql.createConnection({
-    host: 'monorail.proxy.rlwy.net',
+    host: 'autorack.proxy.rlwy.net',
     user: 'root',
-    password: 'vkrdPOhhIwrJuacKptvgdNMkQNnrTNUl',
+    password: 'RKBGRsBRRlqVfLkfpymVYpwSLxKZyqGS',
     database: 'railway',
-    port: 46905,
+    port: 23249,
     multipleStatements: true
 });
 
