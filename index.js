@@ -959,12 +959,10 @@ app.get('/perfil', (req, res) => {
   });
 });
 
-
-// Ruta para obtener reservas con datos relacionados
+//********** Consultar Reservaciones *********
 app.get('/consultar_reservaciones', (req, res) => {
  const usuarioId = req.query.usuario_id;
  // const {usuarioId}= req.body;
-  // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
 // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
 mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId], (err, usuarioResults) => {
   if (err) {
@@ -1028,6 +1026,67 @@ mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARI
   });
 });
 
+});
+
+//********** Consultar Visitas *********
+app.get('/consultar_visitas', (req, res) => {
+ const usuarioId = req.query.usuario_id;
+  //const {usuarioId}= req.body;
+
+  // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
+  mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId], (err, usuarioResults) => {
+    if (err) {
+      console.error('Error al obtener el nombre de usuario:', err);
+      return res.status(500).json({ error: 'Error al obtener el nombre de usuario' });
+    }
+
+    if (!usuarioResults.length) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
+    mysqlConnection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario], (err, personaResults) => {
+      if (err) {
+        console.error('Error al obtener el ID_PERSONA:', err);
+        return res.status(500).json({ error: 'Error al obtener el ID_PERSONA' });
+      }
+
+      if (!personaResults.length) {
+        return res.status(404).json({ error: 'Persona no encontrada' });
+      }
+
+      const ID_PERSONA = personaResults[0].ID_PERSONA;
+
+      // Consultar los registros de visitas en TBL_REGVISITAS
+      const queryRegVisitas = 'SELECT NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA FROM TBL_REGVISITAS WHERE ID_PERSONA = ?';
+      mysqlConnection.query(queryRegVisitas, [ID_PERSONA], (err, regVisitasResults) => {
+        if (err) {
+          console.error('Error al obtener registros de TBL_REGVISITAS:', err);
+          return res.status(500).json({ error: 'Error al obtener registros de TBL_REGVISITAS' });
+        }
+
+        // Consultar los registros de visitas en TBL_VISITANTES_RECURRENTES
+        const queryVisitantesRecurrentes = 'SELECT NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO FROM TBL_VISITANTES_RECURRENTES WHERE ID_PERSONA = ?';
+        mysqlConnection.query(queryVisitantesRecurrentes, [ID_PERSONA], (err, visitantesRecurrentesResults) => {
+          if (err) {
+            console.error('Error al obtener registros de TBL_VISITANTES_RECURRENTES:', err);
+            return res.status(500).json({ error: 'Error al obtener registros de TBL_VISITANTES_RECURRENTES' });
+          }
+
+          // Combinar los resultados de ambas consultas
+          const resultados = {
+            registrosVisitas: regVisitasResults,
+            visitantesRecurrentes: visitantesRecurrentesResults,
+          };
+
+          // Retornar los resultados a la aplicación Flutter
+          res.json(resultados);
+        });
+      });
+    });
+  });
 });
 
 
