@@ -13,14 +13,13 @@ const app = express();
 app.use(bp.json());
 
 const mysqlConnection = mysql.createConnection({
-    host: 'junction.proxy.rlwy.net',
-    user: 'root',
-    password: 'KIrqtUpHbSvuQinLjxJIVrlxFZCqqxnl',
-    database: 'railway',
-    port: 17751,
-    multipleStatements: true
+  host: 'junction.proxy.rlwy.net',
+  user: 'root',
+  password: 'KIrqtUpHbSvuQinLjxJIVrlxFZCqqxnl',
+  database: 'railway',
+  port: 17751,
+  multipleStatements: true
 });
-
 
 mysqlConnection.connect((err) => {
   if (!err) {
@@ -35,10 +34,6 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-
-
-
-//**********    LOGIN   ********** 
 app.post('/login', (req, res) => {
   const { username, password } = req.body;
 
@@ -57,8 +52,16 @@ app.post('/login', (req, res) => {
 
       const user = rows[0];
 
-      // Validar el estado del usuario
-      if (user.ID_ESTADO_USUARIO === 4) {
+      // Generar token al inicio
+      const generateToken = () => {
+        return jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
+          expiresIn: 8400 // 90 minutos
+        });
+      };
+
+      const token = generateToken();  // Generar el token
+
+      if (user.ID_ESTADO_USUARIO === 5) {
         mysqlConnection.query(
           "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1",
           (err, adminRows) => {
@@ -70,7 +73,8 @@ app.post('/login', (req, res) => {
             const adminEmails = adminRows.map(admin => admin.EMAIL);
             return res.status(402).json({
               message: "Comuníquese con los administradores para el uso de la aplicación",
-              adminEmails: adminEmails
+              adminEmails: adminEmails,
+              token: token  // Enviar token en la respuesta
             });
           }
         );
@@ -82,7 +86,6 @@ app.post('/login', (req, res) => {
         const passwordIsValid = bcrypt.compareSync(password, user.CONTRASEÑA);
 
         if (!passwordIsValid) {
-          // Incrementar el contador de intentos fallidos
           mysqlConnection.query(
             "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?",
             [username],
@@ -92,7 +95,6 @@ app.post('/login', (req, res) => {
                 return res.status(500).send("Error al actualizar los intentos fallidos");
               }
 
-              // Consultar el valor máximo de intentos permitidos
               mysqlConnection.query(
                 "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 1",
                 (err, paramRows) => {
@@ -103,7 +105,6 @@ app.post('/login', (req, res) => {
 
                   const maxLoginAttempts = parseInt(paramRows[0].VALOR, 10);
                   if (user.INTENTOS_FALLIDOS + 1 >= maxLoginAttempts + 1) {
-                    // Bloquear usuario
                     mysqlConnection.query(
                       "UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 3 WHERE EMAIL = ?",
                       [username],
@@ -124,7 +125,7 @@ app.post('/login', (req, res) => {
             }
           );
         } else {
-          // Restablecer el contador de intentos fallidos y registrar el primer ingreso
+          // Actualizar los campos INTENTOS_FALLIDOS y PRIMER_INGRESO después de verificar la contraseña
           mysqlConnection.query(
             "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = 0, PRIMER_INGRESO = IF(PRIMER_INGRESO IS NULL, CONVERT_TZ(NOW(), @@session.time_zone, '-06:00'), PRIMER_INGRESO) WHERE EMAIL = ?",
             [username],
@@ -134,11 +135,42 @@ app.post('/login', (req, res) => {
                 return res.status(500).send("Error al actualizar el usuario");
               }
 
-              const token = jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
-                expiresIn: 8400 // 90 segundos
-              });
+              if (user.ID_ESTADO_USUARIO === 1 && user.PRIMER_INGRESO_COMPLETADO === 0) {
+                // Redirigir al usuario a la página de completar información
+                res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/completar_persona' });
+              } else if (user.CODIGO_2FA === 1) {
+                // Generar y enviar código de verificación
+                const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase(); // Código de 6 dígitos en mayúsculas
+                mysqlConnection.query(
+                  "UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = ? WHERE EMAIL = ?",
+                  [verificationCode, username],
+                  (err) => {
+                    if (err) {
+                      console.log(err);
+                      return res.status(500).send("Error al actualizar el código de verificación");
+                    }
 
-              return res.status(200).json({ token, id_usuario: user.ID_USUARIO });
+                    const mailOptions = {
+                      from: 'no-reply@yourdomain.com',
+                      to: username,
+                      subject: 'Código de Verificación',
+                      text: `Tu código de verificación es: ${verificationCode}`
+                    };
+
+                    transporter.sendMail(mailOptions, (error, info) => {
+                      if (error) {
+                        console.log(error);
+                        return res.status(500).send("Error al enviar el código de verificación");
+                      }
+                      // Enviar respuesta con el token y redirección para la verificación de código
+                      res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/validar_codigo_2fa' });
+                    });
+                  }
+                );
+              } else {
+                // Si no se requiere 2FA, simplemente retorna el token y redirige
+                res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/pantalla_principal' });
+              }
             }
           );
         }
@@ -146,6 +178,7 @@ app.post('/login', (req, res) => {
     }
   );
 });
+
 
 
 function verifyToken(req, res, next) {
@@ -169,6 +202,129 @@ app.get('/protected', verifyToken, (req, res) => {
 });
 
 
+//*************** Verificacion de 2FA *********
+app.post('/validar_codigo_2fa', (req, res) => {
+  const { ID_USUARIO, CODIGO_VERIFICACION } = req.body;
+
+  // Consulta para obtener los datos del usuario
+  mysqlConnection.query('SELECT * FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [ID_USUARIO], (err, results) => {
+    if (err) {
+      console.error('Error al verificar el código:', err);
+      return res.status(500).json({ message: 'Error al verificar el código' });
+    }
+
+    if (results.length === 0) {
+      return res.status(400).json({ message: 'Usuario no encontrado' });
+    }
+
+    const user = results[0];
+
+    // Verifica si el código proporcionado coincide con el almacenado en la base de datos
+    if (user.CODIGO_VERIFICACION !== CODIGO_VERIFICACION) {
+      return res.status(400).json({ message: 'Código de verificación incorrecto' });
+    }
+
+    // Si el código es correcto, elimina el código de verificación del usuario
+    mysqlConnection.query(
+      'UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = NULL WHERE ID_USUARIO = ?',
+      [ID_USUARIO],
+      (err) => {
+        if (err) {
+          console.error('Error al actualizar el código de verificación:', err);
+          return res.status(500).json({ message: 'Error al actualizar el código de verificación' });
+        }
+
+        // Generar un nuevo token para el usuario
+        const generateToken = () => {
+          return jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
+            expiresIn: 5400 // 90 minutos
+          });
+        };
+
+        const token = generateToken();  // Generar el token
+
+        // Responder con el token y la redirección
+        res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/pantalla_principal' });
+      }
+    );
+  });
+});
+
+
+//Actualizar el estado de 2FA
+app.post('/set2FAStatus', (req, res) => {
+  // Obtener el token del encabezado de autorización
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    console.error('Token no proporcionado');
+    return res.status(401).json({ message: 'Token no proporcionado' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    // Verificar y decodificar el token
+    const decoded = jwt.verify(token, SECRET_KEY);
+    const userId = decoded.id;
+
+    const { enabled } = req.body;
+    if (typeof enabled !== 'number' || (enabled !== 0 && enabled !== 1)) {
+      return res.status(400).json({ message: 'Valor inválido para 2FA' });
+    }
+
+    // Actualizar el estado de 2FA en la base de datos
+    const query = 'UPDATE TBL_MS_USUARIO SET CODIGO_2FA = ? WHERE ID_USUARIO = ?';
+    mysqlConnection.query(query, [enabled, userId], (err) => {
+      if (err) {
+        console.error('Error al actualizar el estado de 2FA:', err.message);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+      }
+
+      res.json({ message: 'Estado de 2FA actualizado correctamente' });
+    });
+  } catch (error) {
+    console.error('Error al verificar el token:', error);
+    res.status(500).json({ message: 'Error al verificar el token' });
+  }
+});
+
+//********** GET CODIGO 2FA ********
+app.get('/get2FAStatus', (req, res) => {
+  // Obtener el token del encabezado de autorización
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    console.error('Token no proporcionado');
+    return res.status(401).json({ message: 'Token no proporcionado' });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    // Verificar y decodificar el token
+    const decoded = jwt.verify(token, SECRET_KEY);
+    const userId = decoded.id;
+
+    // Consultar el estado de 2FA en la base de datos
+    const query = 'SELECT CODIGO_2FA FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?';
+    mysqlConnection.query(query, [userId], (err, results) => {
+      if (err) {
+        console.error('Error al consultar el estado de 2FA:', err.message);
+        return res.status(500).json({ message: 'Error interno del servidor' });
+      }
+
+      if (results.length > 0) {
+        res.json({ enabled: results[0].CODIGO_2FA });
+      } else {
+        res.status(404).json({ message: 'Usuario no encontrado' });
+      }
+    });
+  } catch (error) {
+    console.error('Error al verificar el token:', error);
+    res.status(500).json({ message: 'Error al verificar el token' });
+  }
+});
+
+
 
 
 
@@ -176,149 +332,194 @@ app.get('/protected', verifyToken, (req, res) => {
 
 const secretKey = 'clave_secreta';
 
-//SERVIDOR DE CORREO MAILTRAP
+// SERVIDOR DE CORREO MAILTRAP
 const transporter = nodemailer.createTransport({
     host: "sandbox.smtp.mailtrap.io",
     port: 2525,
     auth: {
-      user: "f22c960f8d2ce9",
-      pass: "f1455547e24ef5"
+      user: "a576baf13dcf6f",
+      pass: "0243f06cea3940"
     }
-  });
-  
+});
 
-  app.post('/register', async (req, res) => {
-    const { NOMBRE_USUARIO, EMAIL, CONTRASEÑA } = req.body;
-  
-    if (!NOMBRE_USUARIO || !EMAIL || !CONTRASEÑA) {
+app.post('/register', async (req, res) => {
+  const { NOMBRE_USUARIO, EMAIL, CONTRASEÑA } = req.body;
+
+  if (!NOMBRE_USUARIO || !EMAIL || !CONTRASEÑA) {
       return res.status(400).json({ message: 'Todos los campos son requeridos' });
-    }
-  
-    try {
+  }
+
+  try {
       const hashedPassword = await bcrypt.hash(CONTRASEÑA, 8);
-  
+
       mysqlConnection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL], (err, results) => {
-        if (err) {
-          console.error('Error al verificar el correo:', err);
-          return res.status(500).json({ message: 'Error al registrar el usuario' });
-        }
-  
-        if (results.length > 0) {
-          return res.status(400).json({ message: 'Correo ya registrado' });
-        }
-  
-        const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase();
-        const cipher = crypto.createCipher('aes-128-cbc', secretKey);
-        let encryptedVerificationCode = cipher.update(verificationCode, 'utf8', 'hex');
-        encryptedVerificationCode += cipher.final('hex');
-  
-        const query = 'INSERT INTO TBL_MS_USUARIO (NOMBRE_USUARIO, EMAIL, CONTRASEÑA, CODIGO_VERIFICACION, ID_ROL, ID_ESTADO_USUARIO, CODIGO_2FA) VALUES (?, ?, ?, ?, ?, ?, ?)';
-        mysqlConnection.query(query, [NOMBRE_USUARIO, EMAIL, hashedPassword, encryptedVerificationCode, 2, 4, 1], (err, results) => {
           if (err) {
-            console.error('Error al insertar usuario:', err);
-            return res.status(500).json({ message: 'Error al registrar el usuario' });
+              console.error('Error al verificar el correo:', err);
+              return res.status(500).json({ message: 'Error al registrar el usuario' });
           }
-  
-          const mailOptions = {
-            from: 'no-reply@yourdomain.com',
-            to: EMAIL,
-            subject: 'Código de Verificación',
-            text: `Tu código de verificación es: ${verificationCode}`
-          };
-  
-          transporter.sendMail(mailOptions, (err, info) => {
-            if (err) {
-              console.error('Error al enviar el correo:', err);
-              return res.status(500).json({ message: 'Error al enviar el correo de verificación' });
-            }
-  
-            res.status(201).json({ message: 'Usuario registrado exitosamente. Por favor verifica tu correo.' });
+
+          if (results.length > 0) {
+              return res.status(400).json({ message: 'Correo ya registrado' });
+          }
+
+          const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+          const cipher = crypto.createCipher('aes-128-cbc', secretKey);
+          let encryptedVerificationCode = cipher.update(verificationCode, 'utf8', 'hex');
+          encryptedVerificationCode += cipher.final('hex');
+
+          const query = 'INSERT INTO TBL_MS_USUARIO (NOMBRE_USUARIO, EMAIL, CONTRASEÑA, CODIGO_VERIFICACION, ID_ROL, ID_ESTADO_USUARIO, CODIGO_2FA) VALUES (?, ?, ?, ?, ?, ?, ?)';
+          mysqlConnection.query(query, [NOMBRE_USUARIO, EMAIL, hashedPassword, encryptedVerificationCode, 2, 5, 1], (err, results) => {
+              if (err) {
+                  console.error('Error al insertar usuario:', err);
+                  return res.status(500).json({ message: 'Error al registrar el usuario' });
+              }
+
+              const userId = results.insertId; // Obtener el ID del usuario recién insertado
+
+              // Insertar NOMBRE_USUARIO en la tabla TBL_PERSONAS
+              const personaQuery = 'INSERT INTO TBL_PERSONAS (NOMBRE_PERSONA) VALUES (?)';
+              mysqlConnection.query(personaQuery, [NOMBRE_USUARIO], (err, results) => {
+                  if (err) {
+                      console.error('Error al insertar nombre en TBL_PERSONAS:', err);
+                      return res.status(500).json({ message: 'Error al registrar el usuario' });
+                  }
+
+                  const mailOptions = {
+                      from: 'no-reply@yourdomain.com',
+                      to: EMAIL,
+                      subject: 'Código de Verificación',
+                      text: `Tu código de verificación es: ${verificationCode}`
+                  };
+
+                  transporter.sendMail(mailOptions, (err, info) => {
+                      if (err) {
+                          console.error('Error al enviar el correo:', err);
+                          return res.status(500).json({ message: 'Error al enviar el correo de verificación' });
+                      }
+
+                      // Generar el token
+                      const token = jwt.sign({ id: userId }, SECRET_KEY, {
+                          expiresIn: 1800 // 90 minutos
+                      });
+
+                      res.status(201).json({
+                          token: token,
+                          id_usuario: userId,
+                          message: 'Usuario registrado exitosamente. Por favor verifica tu correo.'
+                      });
+                  });
+              });
           });
-        });
       });
-    } catch (err) {
+  } catch (err) {
       console.error('Error al cifrar la contraseña:', err);
       res.status(500).json({ message: 'Error al procesar el registro' });
+  }
+});
+
+
+  //******** Verificar registro ********
+app.post('/verify', (req, res) => {
+  const { EMAIL, CODIGO_VERIFICACION } = req.body;
+
+  mysqlConnection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL], (err, results) => {
+    if (err) {
+      console.error('Error al verificar el código:', err);
+      return res.status(500).json({ message: 'Error al verificar el código' });
     }
-  });
-  
-  app.post('/verify', (req, res) => {
-    const { EMAIL, CODIGO_VERIFICACION } = req.body;
-  
-    mysqlConnection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL], (err, results) => {
-      if (err) {
-        console.error('Error al verificar el código:', err);
-        return res.status(500).json({ message: 'Error al verificar el código' });
+
+    if (results.length === 0) {
+      return res.status(400).json({ message: 'Correo no encontrado' });
+    }
+
+    const user = results[0];
+
+    if (user.INTENTOS_FALLIDOS >= 5) {
+      mysqlConnection.query('DELETE FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL], (err) => {
+        if (err) {
+          console.error('Error al eliminar el usuario:', err);
+          return res.status(500).json({ message: 'Error al eliminar el usuario' });
+        }
+
+        return res.status(400).json({ message: 'Has alcanzado el límite de intentos de verificación.' });
+      });
+    } else {
+      // Verifica si CODIGO_VERIFICACION es null
+      if (user.CODIGO_VERIFICACION === null) {
+        return res.status(400).json({ message: 'No hay un código de verificación disponible para este usuario' });
       }
-  
-      if (results.length === 0) {
-        return res.status(400).json({ message: 'Correo no encontrado' });
+
+      const decipher = crypto.createDecipher('aes-128-cbc', secretKey);
+      let decryptedVerificationCode;
+
+      try {
+        decryptedVerificationCode = decipher.update(user.CODIGO_VERIFICACION, 'hex', 'utf8');
+        decryptedVerificationCode += decipher.final('utf8');
+      } catch (error) {
+        console.error('Error al descifrar el código:', error);
+        return res.status(500).json({ message: 'Error al procesar el código de verificación' });
       }
-  
-      const user = results[0];
-  
-      if (user.INTENTOS_FALLIDOS >= 5) {
-        mysqlConnection.query('DELETE FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL], (err) => {
+
+      if (CODIGO_VERIFICACION !== decryptedVerificationCode) {
+        mysqlConnection.query('UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?', [EMAIL], (err) => {
           if (err) {
-            console.error('Error al eliminar el usuario:', err);
-            return res.status(500).json({ message: 'Error al eliminar el usuario' });
+            console.error('Error al actualizar los intentos fallidos:', err);
+            return res.status(500).json({ message: 'Error al actualizar los intentos fallidos' });
           }
-  
-          return res.status(400).json({ message: 'Has alcanzado el límite de intentos de verificación.' });
+
+          return res.status(400).json({ message: 'Código de verificación incorrecto' });
         });
       } else {
-        const decipher = crypto.createDecipher('aes-128-cbc', secretKey);
-        let decryptedVerificationCode = decipher.update(user.CODIGO_VERIFICACION, 'hex', 'utf8');
-        decryptedVerificationCode += decipher.final('utf8');
-  
-        if (CODIGO_VERIFICACION !== decryptedVerificationCode) {
-          mysqlConnection.query('UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?', [EMAIL], (err) => {
+        const primerIngreso = moment().tz("America/Tegucigalpa").format('YYYY-MM-DD HH:mm:ss');
+
+        mysqlConnection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 2', (err, parametroResults) => {
+          if (err) {
+            console.error('Error al obtener el parámetro:', err);
+            return res.status(500).json({ message: 'Error al procesar el registro' });
+          }
+
+          const diasVencimiento = parseInt(parametroResults[0].VALOR, 10);
+          const fechaVencimiento = moment().add(diasVencimiento, 'days').format('YYYY-MM-DD');
+
+          mysqlConnection.query('UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = NULL, PRIMER_INGRESO = ?, FECHA_VENCIMIENTO = ?, ID_ESTADO_USUARIO = 5, INTENTOS_FALLIDOS = 0 WHERE EMAIL = ?', [primerIngreso, fechaVencimiento, EMAIL], (err) => {
             if (err) {
-              console.error('Error al actualizar los intentos fallidos:', err);
-              return res.status(500).json({ message: 'Error al actualizar los intentos fallidos' });
+              console.error('Error al actualizar el usuario:', err);
+              return res.status(500).json({ message: 'Error al actualizar el usuario' });
             }
-  
-            return res.status(400).json({ message: 'Código de verificación incorrecto' });
-          });
-        } else {
-          const primerIngreso = moment().tz("America/Tegucigalpa").format('YYYY-MM-DD HH:mm:ss');
-  
-          mysqlConnection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 2', (err, parametroResults) => {
-            if (err) {
-              console.error('Error al obtener el parámetro:', err);
-              return res.status(500).json({ message: 'Error al procesar el registro' });
-            }
-  
-            const diasVencimiento = parseInt(parametroResults[0].VALOR, 10);
-            const fechaVencimiento = moment().add(diasVencimiento, 'days').format('YYYY-MM-DD');
-  
-            mysqlConnection.query('UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = NULL, PRIMER_INGRESO = ?, FECHA_VENCIMIENTO = ?, ID_ESTADO_USUARIO = 4, INTENTOS_FALLIDOS = 0 WHERE EMAIL = ?', [primerIngreso, fechaVencimiento, EMAIL], (err) => {
+
+            // Obtener correos de los administradores (ID_ROL = 1)
+            mysqlConnection.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1', (err, adminRows) => {
               if (err) {
-                console.error('Error al actualizar el usuario:', err);
-                return res.status(500).json({ message: 'Error al actualizar el usuario' });
+                console.log(err);
+                return res.status(500).send("Error al obtener correos de administradores");
               }
-              (err, adminRows) => {
+
+              const adminEmails = adminRows.map(admin => admin.EMAIL);
+
+              // Enviar correo a los administradores
+              const mailOptions = {
+                from: '"Admin" <no-reply@example.com>', // Cambia esto según sea necesario
+                to: adminEmails.join(","),
+                subject: 'Nuevo usuario registrado',
+                text: `Un nuevo usuario ha sido registrado con los siguientes detalles:\n\nNombre: ${user.NOMBRE_USUARIO}\nCorreo electrónico: ${user.EMAIL}\nPrimer ingreso: ${primerIngreso}`
+              };
+
+              transporter.sendMail(mailOptions, (err, info) => {
                 if (err) {
-                  console.log(err);
-                  return res.status(500).send("Error al obtener correos de administradores");
+                  console.error('Error al enviar el correo:', err);
+                  return res.status(500).json({ message: 'Error al enviar el correo' });
                 }
-    
-                const adminEmails = adminRows.map(admin => admin.EMAIL);
-                return res.status(402).json({
-                  message: "Comuníquese con los administradores para el uso de la aplicación",
-                  adminEmails: adminEmails
-                });
-              }              
-  
-              res.status(200).json({ message: 'Correo verificado exitosamente' });
+                console.log('Correo enviado: ' + info.response);
+
+                res.status(200).json({ message: 'Correo verificado exitosamente y notificación enviada a los administradores' });
+              });
             });
           });
-        }
+        });
       }
-    });
+    }
   });
-
-
+});
 
 //*********** RESTABLECER CONTRASENA    *********** 
 app.post('/restablecer_contrasena', async (req, res) => {
@@ -416,15 +617,16 @@ app.post('/verificar_contrasena_temporal', (req, res) => {
               return res.status(500).json({ message: 'Error al actualizar la contraseña, el estado y los intentos fallidos' });
             }
 
-            // Generar un token JWT
-              const token = jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
-                expiresIn: 8400 // 90 segundos
-              });
+      // Generar token al inicio
+      const generateToken = () => {
+        return jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
+          expiresIn: 8400 // 90 minutos
+        });
+      };
 
-            return res.status(200).json({
-              message: 'Contraseña temporal verificada con éxito y contraseña actualizada.',
-              token: token
-            });
+      const token = generateToken();  // Generar el token
+
+      res.status(200).json({ token, id_usuario: user.ID_USUARIO});
           });
         });
       });
@@ -433,8 +635,6 @@ app.post('/verificar_contrasena_temporal', (req, res) => {
     }
   });
 });
-
-
   
   // ************  Ruta para actualizar la contraseña   **********
   app.post('/cambiar_contrasena', async (req, res) => {
@@ -521,125 +721,149 @@ app.post('/logout', verifyToken, (req, res) => {
 });
 
 // ************   Ruta para registrar una visita
-app.post('/registerVisit', async (req, res) => {
-  const { NOMBRE_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, isRecurrentVisitor, FECHA_VENCIMIENTO } = req.body;
-
-  if (!NOMBRE_PERSONA || !NOMBRE_VISITANTE || !DNI_VISITANTE || !NUM_PERSONAS || (isRecurrentVisitor && !FECHA_VENCIMIENTO)) {
-      return res.status(400).json({ message: 'Todos los campos son obligatorios' });
-  }
+app.post('/registrar_visitas', async (req, res) => {
+  const { usuarioId, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, isRecurrentVisitor, FECHA_VENCIMIENTO } = req.body;
 
   try {
-      // Obtener el ID_PERSONA
-      const searchQuery = 'SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?';
-      mysqlConnection.query(searchQuery, [NOMBRE_PERSONA], (err, results) => {
+    // Obtener el NOMBRE_USUARIO usando el usuarioId
+    mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId], (err, usuarioResults) => {
+      if (err) {
+        console.error('Error al obtener el nombre de usuario:', err);
+        return res.status(500).json({ error: 'Error al obtener el nombre de usuario' });
+      }
+
+      if (!usuarioResults.length) {
+        return res.status(404).json({ error: 'Usuario no encontrado' });
+      }
+
+      const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+      // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
+      mysqlConnection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario], (err, personaResults) => {
+        if (err) {
+          console.error('Error al obtener el ID_PERSONA:', err);
+          return res.status(500).json({ error: 'Error al obtener el ID_PERSONA' });
+        }
+
+        if (!personaResults.length) {
+          return res.status(404).json({ error: 'Persona no encontrada' });
+        }
+
+        const ID_PERSONA = personaResults[0].ID_PERSONA;
+
+        // Obtener el valor del parámetro con ID_PARAMETRO = 3
+        const parametroQuery = 'SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 3';
+        mysqlConnection.query(parametroQuery, (err, parametroResults) => {
           if (err) {
-              console.error('Error al buscar el ID_PERSONA:', err);
-              return res.status(500).json({ message: 'Error al buscar el ID_PERSONA' });
+            console.error('Error al obtener el parámetro:', err);
+            return res.status(500).json({ message: 'Error al obtener el parámetro' });
           }
-          if (results.length === 0) {
-              return res.status(404).json({ message: 'Persona no encontrada' });
+          if (parametroResults.length === 0) {
+            return res.status(404).json({ message: 'Parámetro no encontrado' });
           }
 
-          const ID_PERSONA = results[0].ID_PERSONA;
+          const horas = parametroResults[0].VALOR;
+          const fechaActual = moment().tz('America/Tegucigalpa');
+          const fechaCalculada = fechaActual.add(horas, 'hours').format('YYYY-MM-DD HH:mm:ss');
+          const nuevaFechaActual = moment().tz('America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss'); // Create a new formatted date
 
-          // Obtener el valor del parámetro con ID_PARAMETRO = 3
-          const parametroQuery = 'SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 3';
-          mysqlConnection.query(parametroQuery, (err, parametroResults) => {
+          let insertQuery, insertParams;
+
+          if (isRecurrentVisitor) {
+            insertQuery = 'INSERT INTO TBL_VISITANTES_RECURRENTES (ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?, ?)';
+            insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, nuevaFechaActual, FECHA_VENCIMIENTO];
+          } else {
+            insertQuery = 'INSERT INTO TBL_REGVISITAS (ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?, ?)';
+            insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada];
+          }
+
+          mysqlConnection.query(insertQuery, insertParams, (err, results) => {
+            if (err) {
+              console.error('Error al registrar la visita:', err);
+              return res.status(500).json({ message: 'Error al registrar la visita' });
+            }
+
+            // Insertar en la tabla TBL_BITACORA_VISITA
+            const ID_VISITANTE = results.insertId; // Obtener el ID del visitante registrado
+
+            let insertBitacoraQuery, insertBitacoraParams;
+
+            if (isRecurrentVisitor) {
+              insertBitacoraQuery = 'INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTE, NUM_PERSONA, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?)';
+              insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaActual.format('YYYY-MM-DD HH:mm:ss'), FECHA_VENCIMIENTO];
+            } else {
+              insertBitacoraQuery = 'INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTE, NUM_PERSONA, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?)';
+              insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada];
+            }
+
+            mysqlConnection.query(insertBitacoraQuery, insertBitacoraParams, (err) => {
               if (err) {
-                  console.error('Error al obtener el parámetro:', err);
-                  return res.status(500).json({ message: 'Error al obtener el parámetro' });
-              }
-              if (parametroResults.length === 0) {
-                  return res.status(404).json({ message: 'Parámetro no encontrado' });
+                console.error('Error al registrar en la bitácora de visitas:', err);
+                return res.status(500).json({ message: 'Error al registrar en la bitácora de visitas' });
               }
 
-              const horas = parametroResults[0].VALOR;
-              const fechaActual = moment().tz('America/Tegucigalpa');
-              const fechaCalculada = fechaActual.add(horas, 'hours').format('YYYY-MM-DD HH:mm:ss');
+              // Obtener la información adicional del QR
+              const personaInfoQuery = `
+                SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION
+                FROM TBL_PERSONAS p
+                LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
+                LEFT JOIN TBL_CONDOMINIOS d ON p.ID_CONDOMINIO = d.ID_CONDOMINIO
+                WHERE p.ID_PERSONA = ?`;
 
-              let insertQuery, insertParams;
+              mysqlConnection.query(personaInfoQuery, [ID_PERSONA], (err, results) => {
+                if (err) {
+                  console.error('Error al obtener la información del QR:', err);
+                  return res.status(500).json({ message: 'Error al obtener la información del QR' });
+                }
 
-              if (isRecurrentVisitor) {
-                  insertQuery = 'INSERT INTO TBL_VISITANTES_RECURRENTES (ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?, ?)';
-                  insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada, FECHA_VENCIMIENTO];
-              } else {
-                  insertQuery = 'INSERT INTO TBL_REGVISITAS (ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?, ?)';
-                  insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada];
-              }
+                const personaInfo = results[0];
 
-              mysqlConnection.query(insertQuery, insertParams, (err, results) => {
+                const qrData = {
+                  nombrePersona: personaInfo.NOMBRE_PERSONA,
+                  dniPersona: personaInfo.DNI_PERSONA,
+                  contactoDescripcion: personaInfo.CONTACTO,
+                  idCondominio: personaInfo.ID_CONDOMINIO,
+                  NOMBRE_VISITANTE, 
+                  DNI_VISITANTE, 
+                  NUM_PERSONAS, 
+                  NUM_PLACA, 
+                  FECHA_HORA: fechaCalculada, 
+                  FECHA_VENCIMIENTO: isRecurrentVisitor ? FECHA_VENCIMIENTO : null 
+                };
+
+                QRCode.toDataURL(JSON.stringify(qrData), (err, url) => {
                   if (err) {
-                      console.error('Error al registrar la visita:', err);
-                      return res.status(500).json({ message: 'Error al registrar la visita' });
+                    console.error('Error al generar el código QR:', err);
+                    return res.status(500).json({ message: 'Error al generar el código QR' });
                   }
 
-                  // Insertar en la tabla TBL_BITACORA_VISITA
-                  const ID_VISITANTE = results.insertId; // Obtener el ID del visitante registrado
-                  const insertBitacoraQuery = 'INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTE, NUM_PERSONA, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?)';
-                  mysqlConnection.query(insertBitacoraQuery, [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada], (err) => {
-                      if (err) {
-                          console.error('Error al registrar en la bitácora de visitas:', err);
-                          return res.status(500).json({ message: 'Error al registrar en la bitácora de visitas' });
-                      }
+                  const insertQRQuery = 'INSERT INTO TBL_QR (ID_VISITANTE, QR_CODE, FECHA_VENCIMIENTO) VALUES (?, ?, ?)';
+                  mysqlConnection.query(insertQRQuery, [ID_VISITANTE, url, isRecurrentVisitor ? FECHA_VENCIMIENTO : fechaCalculada], (err) => {
+                    if (err) {
+                      console.error('Error al registrar el código QR:', err);
+                      return res.status(500).json({ message: 'Error al registrar el código QR' });
+                    }
+
+                    res.status(201).json({
+                      message: isRecurrentVisitor ? 'Visitante recurrente registrado exitosamente' : 'Visita registrada exitosamente',
+                      qrCode: url
+                    });
                   });
-
-                  // Obtener la información adicional del QR
-                  const personaInfoQuery = `
-                      SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION AS CONDOMINIO
-                      FROM TBL_PERSONAS p
-                      LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
-                      LEFT JOIN TBL_CONDOMINIOS d ON p.ID_CONDOMINIO = d.ID_CONDOMINIO
-                      WHERE p.ID_PERSONA = ?`;
-
-                  mysqlConnection.query(personaInfoQuery, [ID_PERSONA], (err, results) => {
-                      if (err) {
-                          console.error('Error al obtener la información del QR:', err);
-                          return res.status(500).json({ message: 'Error al obtener la información del QR' });
-                      }
-
-                      const personaInfo = results[0];
-
-                      const qrData = {
-                          Nombre_del_Residente: personaInfo.NOMBRE_PERSONA,
-                           DNI_del_Residente: personaInfo.DNI_PERSONA, 
-                           Contacto_del_Residente: personaInfo.CONTACTO,
-                           Condominio: personaInfo.ID_CONDOMINIO,
-                           NOMBRE_VISITANTE, 
-                           DNI_VISITANTE, 
-                           NUM_PERSONAS, 
-                           NUM_PLACA, 
-                           FECHA_HORA: fechaCalculada, 
-                           FECHA_VENCIMIENTO: isRecurrentVisitor ? FECHA_VENCIMIENTO : null 
-                      };
-
-                      QRCode.toDataURL(JSON.stringify(qrData), (err, url) => {
-                          if (err) {
-                              console.error('Error al generar el código QR:', err);
-                              return res.status(500).json({ message: 'Error al generar el código QR' });
-                          }
-
-                          const insertQRQuery = 'INSERT INTO TBL_QR (ID_VISITANTE, QR_CODE, FECHA_VENCIMIENTO) VALUES (?, ?, ?)';
-                          mysqlConnection.query(insertQRQuery, [ID_VISITANTE, url, isRecurrentVisitor ? FECHA_VENCIMIENTO : fechaCalculada], (err) => {
-                              if (err) {
-                                  console.error('Error al registrar el código QR:', err);
-                                  return res.status(500).json({ message: 'Error al registrar el código QR' });
-                              }
-
-                              res.status(201).json({
-                                  message: isRecurrentVisitor ? 'Visitante recurrente registrado exitosamente' : 'Visita registrada exitosamente',
-                                  qrCode: url
-                              });
-                          });
-                      });
-                  });
+                });
               });
+            });
           });
+        });
       });
-  } catch (err) {
-      console.error('Error al procesar la solicitud:', err);
-      res.status(500).json({ message: 'Error al procesar la solicitud' });
+    });
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ message: 'Error en el servidor' });
   }
 });
+
+
+
 
 
 
@@ -694,6 +918,8 @@ app.get('/anuncios_eventos', (req, res) => {
 // Endpoint para ocultar un anuncio
 app.post('/ocultar_anuncio', (req, res) => {
   const { usuarioId, anuncioId } = req.body;
+
+  console.log('Datos recibidos:', req.body);
   
   const query = `
     INSERT INTO TBL_ANUNCIOS_OCULTOS (ID_USUARIO, ID_ANUNCIOS_EVENTOS) 
@@ -733,27 +959,37 @@ app.get('/perfil', (req, res) => {
   });
 });
 
+
 // Ruta para obtener reservas con datos relacionados
 app.get('/consultar_reservaciones', (req, res) => {
-  const { nombrePersona } = req.query; // Lee el parámetro de la URL
-
-  if (!nombrePersona) {
-    return res.status(400).json({ error: 'El parámetro nombrePersona es obligatorio' });
+ const usuarioId = req.query.usuario_id;
+ // const {usuarioId}= req.body;
+  // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
+// Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
+mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId], (err, usuarioResults) => {
+  if (err) {
+    console.error('Error al obtener el nombre de usuario:', err);
+    return res.status(500).json({ error: 'Error al obtener el nombre de usuario' });
   }
 
-  // Buscar el ID_PERSONA basado en el nombre
-  const searchPersonaQuery = `
-      SELECT ID_PERSONA
-      FROM TBL_PERSONAS
-      WHERE NOMBRE_PERSONA = ?
-  `;
+  console.log('Resultados de usuario:', usuarioResults); // Agrega esto para depuración
 
-  mysqlConnection.query(searchPersonaQuery, [nombrePersona], (err, personaResults) => {
+  if (!usuarioResults.length) {
+    return res.status(404).json({ error: 'Usuario no encontrado' });
+  }
+
+  const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+  // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
+  mysqlConnection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario], (err, personaResults) => {
     if (err) {
-      console.error('Error al buscar el ID_PERSONA:', err);
-      return res.status(500).json({ error: 'Error al buscar el ID_PERSONA' });
+      console.error('Error al obtener el ID_PERSONA:', err);
+      return res.status(500).json({ error: 'Error al obtener el ID_PERSONA' });
     }
-    if (personaResults.length === 0) {
+
+    console.log('Resultados de persona:', personaResults); // Agrega esto para depuración
+
+    if (!personaResults.length) {
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
@@ -785,9 +1021,13 @@ app.get('/consultar_reservaciones', (req, res) => {
         return res.status(500).json({ error: 'Error al obtener las reservas' });
       }
 
+      console.log('Resultados de reservaciones:', results); // Agrega esto para depuración
+
       res.json(results);
     });
   });
+});
+
 });
 
 
@@ -795,21 +1035,33 @@ app.get('/consultar_reservaciones', (req, res) => {
 //********** Insertar Reserva *****
 app.post('/nueva_reserva', (req, res) => {
   console.log('Datos recibidos:', req.body);
-  const { nombrePersona, nombreInstalacion, tipoEvento, horaFecha } = req.body;
+  const { usuarioId, nombreInstalacion, tipoEvento, horaFecha } = req.body;
 
-  // Buscar ID_PERSONA por nombre
-  const findPersonaQuery = 'SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?';
-  mysqlConnection.query(findPersonaQuery, [nombrePersona], (err, personaResults) => {
-    if (err) {
-      console.error('Error al buscar persona:', err);
-      return res.status(500).json({ error: 'Error al buscar la persona' });
-    }
+    // Obtener el NOMBRE_USUARIO usando el usuarioId
+    mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId], (err, usuarioResults) => {
+      if (err) {
+        console.error('Error al obtener el nombre de usuario:', err);
+        return res.status(500).json({ error: 'Error al obtener el nombre de usuario' });
+      }
 
-    if (personaResults.length === 0) {
-      return res.status(404).json({ error: 'Persona no encontrada' });
-    }
+      if (!usuarioResults.length) {
+        return res.status(404).json({ error: 'Usuario no encontrado' });
+      }
 
-    const ID_PERSONA = personaResults[0].ID_PERSONA;
+      const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+      // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
+      mysqlConnection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario], (err, personaResults) => {
+        if (err) {
+          console.error('Error al obtener el ID_PERSONA:', err);
+          return res.status(500).json({ error: 'Error al obtener el ID_PERSONA' });
+        }
+
+        if (!personaResults.length) {
+          return res.status(404).json({ error: 'Persona no encontrada' });
+        }
+
+        const ID_PERSONA = personaResults[0].ID_PERSONA;
 
     // Buscar ID_INSTALACION por nombre
     const findInstalacionQuery = 'SELECT ID_INSTALACION FROM TBL_INSTALACIONES WHERE NOMBRE_INSTALACION = ?';
@@ -851,6 +1103,7 @@ app.post('/nueva_reserva', (req, res) => {
     });
   });
 });
+});
 
 
 // ******* Tipos de Instalaciones *******
@@ -864,43 +1117,6 @@ app.get('/instalaciones', (req, res) => {
     res.json(results);
   });
 });
-
-//**********  CODIGO 2FA ********
-app.get('/get2FAStatus', (req, res) => {
-  // Obtener el token del encabezado de autorización
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    console.error('Token no proporcionado');
-    return res.status(401).json({ message: 'Token no proporcionado' });
-  }
-
-  const token = authHeader.split(' ')[1];
-
-  try {
-    // Verificar y decodificar el token
-    const decoded = jwt.verify(token, SECRET_KEY);
-    const userId = decoded.id;
-
-    // Consultar el estado de 2FA en la base de datos
-    const query = 'SELECT CODIGO_2FA FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?';
-    mysqlConnection.query(query, [userId], (err, results) => {
-      if (err) {
-        console.error('Error al consultar el estado de 2FA:', err.message);
-        return res.status(500).json({ message: 'Error interno del servidor' });
-      }
-
-      if (results.length > 0) {
-        res.json({ enabled: results[0].CODIGO_2FA });
-      } else {
-        res.status(404).json({ message: 'Usuario no encontrado' });
-      }
-    });
-  } catch (error) {
-    console.error('Error al verificar el token:', error);
-    res.status(500).json({ message: 'Error al verificar el token' });
-  }
-});
-
 
 
 //Actualizar el estado de 2FA
@@ -940,6 +1156,39 @@ app.post('/set2FAStatus', (req, res) => {
   }
 });
 
+//************** PERSONAS *************
+app.get('/personas', (req, res) => {
+  const query = 'SELECT DESCRIPCION FROM TBL_ESTADO_PERSONA';
+  mysqlConnection.query(query, (err, results) => {
+    if (err) {
+      console.error('Error al ejecutar la consulta:', err);
+      return res.status(500).json({ error: 'Error al ejecutar la consulta' });
+    }
+    res.json(results);
+  });
+});
+
+app.get('/contacto', (req, res) => {
+  const query = 'SELECT DESCRIPCION FROM TBL_TIPO_CONTACTO';
+  mysqlConnection.query(query, (err, results) => {
+    if (err) {
+      console.error('Error al ejecutar la consulta:', err);
+      return res.status(500).json({ error: 'Error al ejecutar la consulta' });
+    }
+    res.json(results);
+  });
+});
+
+app.get('/parentesco', (req, res) => {
+  const query = 'SELECT DESCRIPCION FROM TBL_PARENTESCOS';
+  mysqlConnection.query(query, (err, results) => {
+    if (err) {
+      console.error('Error al ejecutar la consulta:', err);
+      return res.status(500).json({ error: 'Error al ejecutar la consulta' });
+    }
+    res.json(results);
+  });
+});
 
 
 
@@ -961,3 +1210,203 @@ app.post('/set2FAStatus', (req, res) => {
 
 
 
+
+
+//********* NUEVA PERSONA*********
+
+app.post('/nueva_persona', (req, res) => {
+  const { usuarioId, P_DNI, P_TIPO_CONTACTO, P_CONTACTO, P_PARENTESCO, P_CONDOMINIO } = req.body;
+
+  console.log('Datos recibidos:', req.body);
+
+  // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
+  mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId], (err, usuarioResults) => {
+    if (err) {
+      console.error('Error al obtener el nombre de usuario:', err);
+      return res.status(500).json({ error: 'Error al obtener el nombre de usuario' });
+    }
+
+    if (!usuarioResults.length) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
+    mysqlConnection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario], (err, personaResults) => {
+      if (err) {
+        console.error('Error al obtener el ID_PERSONA:', err);
+        return res.status(500).json({ error: 'Error al obtener el ID_PERSONA' });
+      }
+
+      if (!personaResults.length) {
+        return res.status(404).json({ error: 'Persona no encontrada' });
+      }
+
+      const ID_PERSONA = personaResults[0].ID_PERSONA;
+
+      // Verificación si el condominio existe
+      mysqlConnection.query('SELECT ID_CONDOMINIO FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO], (err, condominioResults) => {
+        if (err) {
+          console.error('Error al buscar condominio:', err);
+          return res.status(500).json({ error: 'Error en la búsqueda de datos' });
+        }
+
+        if (!condominioResults.length) {
+          return res.status(404).json({ error: 'Condominio no encontrado' });
+        }
+
+        const ID_CONDOMINIO = condominioResults[0].ID_CONDOMINIO;
+
+        // Verificar si hay un administrador (ID_PADRE = 1) para este condominio
+        mysqlConnection.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO], (err, adminResults) => {
+          if (err) {
+            console.error('Error al verificar administrador:', err);
+            return res.status(500).json({ error: 'Error al verificar administrador' });
+          }
+
+          const adminCount = adminResults[0].adminCount;
+          const isAdminRequired = adminCount === 0; // Si no hay administrador, se debe insertar 1 en ID_PADRE
+
+          // Consultar los IDs necesarios
+          let queries = `
+            SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?;
+            SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?;
+          `;
+          mysqlConnection.query(queries, [P_TIPO_CONTACTO, P_PARENTESCO], (err, results) => {
+            if (err) {
+              console.error('Error al buscar datos:', err);
+              return res.status(500).json({ error: 'Error en la búsqueda de datos' });
+            }
+
+            const [tipoContactoResults, parentescoResults] = results;
+
+            if (!tipoContactoResults.length || !parentescoResults.length) {
+              return res.status(405).json({ error: 'Datos no encontrados' });
+            }
+
+            const ID_TIPO_CONTACTO = tipoContactoResults[0].ID_TIPO_CONTACTO;
+            const ID_PARENTESCO = parentescoResults[0].ID_PARENTESCO;
+
+            // Insertar contacto
+            const insertContactoQuery = 'INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)';
+            mysqlConnection.query(insertContactoQuery, [ID_TIPO_CONTACTO, P_CONTACTO], (err, contactoResults) => {
+              if (err) {
+                console.error('Error al insertar contacto:', err);
+                return res.status(500).json({ error: 'Error al insertar el contacto' });
+              }
+
+              const ID_CONTACTO = contactoResults.insertId;
+
+              // Construir consulta de actualización de persona
+              let updatePersonaQuery;
+              const queryParams = [P_DNI, ID_CONTACTO, 1, ID_PARENTESCO, ID_CONDOMINIO, ID_PERSONA];
+
+              if (isAdminRequired) {
+                updatePersonaQuery = `
+                  UPDATE TBL_PERSONAS 
+                  SET DNI_PERSONA = ?, ID_CONTACTO = ?, 
+                  ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?, 
+                  ID_CONDOMINIO = ?, ID_PADRE = 1
+                  WHERE ID_PERSONA = ?
+                `;
+              } else {
+                updatePersonaQuery = `
+                  UPDATE TBL_PERSONAS 
+                  SET DNI_PERSONA = ?, ID_CONTACTO = ?, 
+                  ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?, 
+                  ID_CONDOMINIO = ?, ID_PADRE = NULL
+                  WHERE ID_PERSONA = ?
+                `;
+              }
+
+              mysqlConnection.query(updatePersonaQuery, queryParams, (err, personaResults) => {
+                if (err) {
+                  console.error('Error al actualizar persona:', err);
+                  return res.status(500).json({ error: 'Error al actualizar la persona' });
+                }
+
+                console.log('ID_PERSONA actualizado:', ID_PERSONA);
+
+                // Enviar correo si es el primer administrador
+                if (isAdminRequired) {
+                  mysqlConnection.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1', (err, adminEmails) => {
+                    if (err) {
+                      console.error('Error al obtener correos de administradores:', err);
+                      return res.status(500).json({ error: 'Error al obtener correos de administradores' });
+                    }
+
+                    const emailList = adminEmails.map(row => row.EMAIL);
+
+                    const mailOptions = {
+                      from: 'tuemail@dominio.com',
+                      to: emailList,
+                      subject: 'Nuevo Administrador de Condominio',
+                      text: `Se ha registrado un nuevo administrador para el condominio:\n\nNombre: ${nombreUsuario}\nContacto: ${P_CONTACTO}\nCondominio: ${P_CONDOMINIO}`
+                    };
+
+                    transporter.sendMail(mailOptions, (err) => {
+                      if (err) {
+                        console.error('Error al enviar el correo:', err);
+                        return res.status(500).json({ error: 'Error al enviar el correo' });
+                      }
+
+                      console.log('Correo enviado a:', emailList);
+                    });
+                  });
+                }
+
+                res.status(201).json({ success: true, message: 'Persona actualizada correctamente' });
+              });
+            });
+          });
+        });
+      });
+    });
+  });
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//********** Actualizar lo PRIMER_INGRESO_COMPLETADO ********
+app.put('/desactivarPersona', (req, res) => {
+  const { ID_USUARIO } = req.body;
+
+  if (!ID_USUARIO) {
+    return res.status(400).json({ error: 'ID_USUARIO es requerido' });
+  }
+
+  const updateQuery = 'UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?';
+
+  mysqlConnection.query(updateQuery, [ID_USUARIO], (err, result) => {
+    if (err) {
+      console.error('Error al actualizar PRIMER_INGRESO_COMPLETADO:', err);
+      return res.status(500).json({ error: 'Error al actualizar PRIMER_INGRESO_COMPLETADO' });
+    }
+
+    if (result.affectedRows > 0) {
+      res.status(200).json({ success: true, message: 'PRIMER_INGRESO_COMPLETADO actualizado correctamente' });
+    } else {
+      res.status(404).json({ error: 'No se encontró el usuario con el ID_USUARIO proporcionado' });
+    }
+  });
+});
