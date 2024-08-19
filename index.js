@@ -1205,7 +1205,7 @@ app.post('/nueva_reserva', (req, res) => {
         }
 
         // Insertar la reserva si no hay conflicto
-        const insertReservaQuery = 'INSERT INTO TBL_RESERVAS (ID_PERSONA, ID_INSTALACION, ID_ESTADO_RESERVA, TIPO_EVENTO, HORA_FECHA) VALUES (?, ?, 1, ?, ?)';
+        const insertReservaQuery = 'INSERT INTO TBL_RESERVAS (ID_PERSONA, ID_INSTALACION, ID_ESTADO_RESERVA, TIPO_EVENTO, HORA_FECHA) VALUES (?, ?, 3, ?, ?)';
         mysqlConnection.query(insertReservaQuery, [ID_PERSONA, ID_INSTALACION, tipoEvento, horaFecha], (err, insertResult) => {
           if (err) {
             console.error('Error al insertar la reserva:', err);
