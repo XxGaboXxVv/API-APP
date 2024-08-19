@@ -153,7 +153,7 @@ app.post('/login', (req, res) => {
                     const mailOptions = {
                       from: 'no-reply@yourdomain.com',
                       to: username,
-                      subject: 'Código de Verificación',
+                      subject: 'Código de Verificación 2FA',
                       text: `Tu código de verificación es: ${verificationCode}`
                     };
 
@@ -418,7 +418,7 @@ app.post('/register', async (req, res) => {
 });
 
 
-  //******** Verificar registro ********
+//******** Verificar registro ********
 app.post('/verify', (req, res) => {
   const { EMAIL, CODIGO_VERIFICACION } = req.body;
 
@@ -487,39 +487,14 @@ app.post('/verify', (req, res) => {
               return res.status(500).json({ message: 'Error al actualizar el usuario' });
             }
 
-            // Obtener correos de los administradores (ID_ROL = 1)
-            mysqlConnection.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1', (err, adminRows) => {
-              if (err) {
-                console.log(err);
-                return res.status(500).send("Error al obtener correos de administradores");
-              }
-
-              const adminEmails = adminRows.map(admin => admin.EMAIL);
-
-              // Enviar correo a los administradores
-              const mailOptions = {
-                from: '"Admin" <no-reply@example.com>', // Cambia esto según sea necesario
-                to: adminEmails.join(","),
-                subject: 'Nuevo usuario registrado',
-                text: `Un nuevo usuario ha sido registrado con los siguientes detalles:\n\nNombre: ${user.NOMBRE_USUARIO}\nCorreo electrónico: ${user.EMAIL}\nPrimer ingreso: ${primerIngreso}`
-              };
-
-              transporter.sendMail(mailOptions, (err, info) => {
-                if (err) {
-                  console.error('Error al enviar el correo:', err);
-                  return res.status(500).json({ message: 'Error al enviar el correo' });
-                }
-                console.log('Correo enviado: ' + info.response);
-
-                res.status(200).json({ message: 'Correo verificado exitosamente y notificación enviada a los administradores' });
-              });
-            });
+            res.status(200).json({ message: 'Correo verificado exitosamente' });
           });
         });
       }
     }
   });
 });
+
 
 //*********** RESTABLECER CONTRASENA    *********** 
 app.post('/restablecer_contrasena', async (req, res) => {
@@ -804,33 +779,49 @@ app.post('/registrar_visitas', async (req, res) => {
 
               // Obtener la información adicional del QR
               const personaInfoQuery = `
-                SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION
-                FROM TBL_PERSONAS p
-                LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
-                LEFT JOIN TBL_CONDOMINIOS d ON p.ID_CONDOMINIO = d.ID_CONDOMINIO
-                WHERE p.ID_PERSONA = ?`;
-
-              mysqlConnection.query(personaInfoQuery, [ID_PERSONA], (err, results) => {
-                if (err) {
-                  console.error('Error al obtener la información del QR:', err);
-                  return res.status(500).json({ message: 'Error al obtener la información del QR' });
-                }
-
-                const personaInfo = results[0];
-
-                const qrData = {
-                  nombrePersona: personaInfo.NOMBRE_PERSONA,
-                  dniPersona: personaInfo.DNI_PERSONA,
-                  contactoDescripcion: personaInfo.CONTACTO,
-                  idCondominio: personaInfo.ID_CONDOMINIO,
-                  NOMBRE_VISITANTE, 
-                  DNI_VISITANTE, 
-                  NUM_PERSONAS, 
-                  NUM_PLACA, 
-                  FECHA_HORA: fechaCalculada, 
-                  FECHA_VENCIMIENTO: isRecurrentVisitor ? FECHA_VENCIMIENTO : null 
+              SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION AS ID_CONDOMINIO
+              FROM TBL_PERSONAS p
+              LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
+              LEFT JOIN TBL_CONDOMINIOS d ON p.ID_CONDOMINIO = d.ID_CONDOMINIO
+              WHERE p.ID_PERSONA = ?`;
+            
+            mysqlConnection.query(personaInfoQuery, [ID_PERSONA], (err, results) => {
+              if (err) {
+                console.error('Error al obtener la información del QR:', err);
+                return res.status(500).json({ message: 'Error al obtener la información del QR' });
+              }
+            
+              const personaInfo = results[0];
+              let qrData;
+            
+              if (isRecurrentVisitor) {
+                // Si es visitante recurrente, no incluir FECHA_HORA pero sí FECHA_VENCIMIENTO
+                qrData = {
+                  Residente: personaInfo.NOMBRE_PERSONA,
+                  DNI_Residente: personaInfo.DNI_PERSONA,
+                  Contacto: personaInfo.CONTACTO,
+                  Condominio: personaInfo.ID_CONDOMINIO,  // Verifica que este campo esté presente
+                  NOMBRE_VISITANTE,
+                  DNI_VISITANTE,
+                  NUM_PERSONAS,
+                  NUM_PLACA,
+                  FECHA_VENCIMIENTO: FECHA_VENCIMIENTO
                 };
-
+              } else {
+                // Si no es visitante recurrente, incluir FECHA_HORA y no incluir FECHA_VENCIMIENTO
+                qrData = {
+                  Residente: personaInfo.NOMBRE_PERSONA,
+                  DNI_Residente: personaInfo.DNI_PERSONA,
+                  Contacto: personaInfo.CONTACTO,
+                  Condominio: personaInfo.ID_CONDOMINIO,  // Verifica que este campo esté presente
+                  NOMBRE_VISITANTE,
+                  DNI_VISITANTE,
+                  NUM_PERSONAS,
+                  NUM_PLACA,
+                  FECHA_HORA: fechaCalculada
+                };
+              }
+                
                 QRCode.toDataURL(JSON.stringify(qrData), (err, url) => {
                   if (err) {
                     console.error('Error al generar el código QR:', err);
@@ -959,12 +950,10 @@ app.get('/perfil', (req, res) => {
   });
 });
 
-
-// Ruta para obtener reservas con datos relacionados
+//********** Consultar Reservaciones *********
 app.get('/consultar_reservaciones', (req, res) => {
  const usuarioId = req.query.usuario_id;
  // const {usuarioId}= req.body;
-  // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
 // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
 mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId], (err, usuarioResults) => {
   if (err) {
@@ -1030,7 +1019,133 @@ mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARI
 
 });
 
+//********** Consultar Visitas *********
+app.get('/consultar_visitas', (req, res) => {
+  const usuarioId = req.query.usuario_id;
 
+  // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
+  mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId], (err, usuarioResults) => {
+    if (err) {
+      console.error('Error al obtener el nombre de usuario:', err);
+      return res.status(500).json({ error: 'Error al obtener el nombre de usuario' });
+    }
+
+    if (!usuarioResults.length) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
+    mysqlConnection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario], (err, personaResults) => {
+      if (err) {
+        console.error('Error al obtener el ID_PERSONA:', err);
+        return res.status(500).json({ error: 'Error al obtener el ID_PERSONA' });
+      }
+
+      if (!personaResults.length) {
+        return res.status(404).json({ error: 'Persona no encontrada' });
+      }
+
+      const ID_PERSONA = personaResults[0].ID_PERSONA;
+
+      // Consultar los registros de visitas en TBL_REGVISITAS
+      const queryRegVisitas = `
+        SELECT NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, NULL AS FECHA_VENCIMIENTO, 'No recurrente' AS TIPO
+        FROM TBL_REGVISITAS 
+        WHERE ID_PERSONA = ?`;
+
+      // Consultar los registros de visitas en TBL_VISITANTES_RECURRENTES
+      const queryVisitantesRecurrentes = `
+        SELECT NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO, 'Recurrente' AS TIPO
+        FROM TBL_VISITANTES_RECURRENTES 
+        WHERE ID_PERSONA = ?`;
+
+      mysqlConnection.query(queryRegVisitas, [ID_PERSONA], (err, regVisitasResults) => {
+        if (err) {
+          console.error('Error al obtener registros de TBL_REGVISITAS:', err);
+          return res.status(500).json({ error: 'Error al obtener registros de TBL_REGVISITAS' });
+        }
+
+        mysqlConnection.query(queryVisitantesRecurrentes, [ID_PERSONA], (err, visitantesRecurrentesResults) => {
+          if (err) {
+            console.error('Error al obtener registros de TBL_VISITANTES_RECURRENTES:', err);
+            return res.status(500).json({ error: 'Error al obtener registros de TBL_VISITANTES_RECURRENTES' });
+          }
+
+          // Combinar los resultados de ambas consultas
+          const resultados = [...regVisitasResults, ...visitantesRecurrentesResults];
+
+          // Retornar los resultados a la aplicación Flutter
+          res.json(resultados);
+        });
+      });
+    });
+  });
+});
+
+//********* Consultar familia ************
+app.get('/consultar_familia', (req, res) => {
+  const usuarioId = req.query.usuario_id;
+  
+  // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
+  mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId], (err, usuarioResults) => {
+    if (err) {
+      console.error('Error al obtener el nombre de usuario:', err);
+      return res.status(500).json({ error: 'Error al obtener el nombre de usuario' });
+    }
+
+    if (!usuarioResults.length) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    // Obtener el ID_PERSONA y el ID_CONDOMINIO de la tabla TBL_PERSONAS usando el nombreUsuario
+    mysqlConnection.query('SELECT ID_PERSONA, ID_CONDOMINIO FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario], (err, personaResults) => {
+      if (err) {
+        console.error('Error al obtener el ID_PERSONA:', err);
+        return res.status(500).json({ error: 'Error al obtener el ID_PERSONA' });
+      }
+
+      if (!personaResults.length) {
+        return res.status(404).json({ error: 'Persona no encontrada' });
+      }
+
+      const ID_PERSONA = personaResults[0].ID_PERSONA;
+      const ID_CONDOMINIO = personaResults[0].ID_CONDOMINIO;
+
+      // Consultar todas las personas con el mismo ID_CONDOMINIO
+      const queryPersonas = `
+        SELECT 
+          p.NOMBRE_PERSONA, 
+          p.DNI_PERSONA, 
+          c.DESCRIPCION AS CONTACTO,
+          tp.DESCRIPCION AS TIPO_PERSONA,
+          ep.DESCRIPCION AS ESTADO_PERSONA,
+          par.DESCRIPCION AS PARENTESCO,
+          con.DESCRIPCION AS CONDOMINIO
+        FROM TBL_PERSONAS p
+        LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
+        LEFT JOIN TBL_TIPO_PERSONAS tp ON p.ID_TIPO_PERSONA = tp.ID_TIPO_PERSONA
+        LEFT JOIN TBL_ESTADO_PERSONA ep ON p.ID_ESTADO_PERSONA = ep.ID_ESTADO_PERSONA
+        LEFT JOIN TBL_PARENTESCOS par ON p.ID_PARENTESCO = par.ID_PARENTESCO
+        LEFT JOIN TBL_CONDOMINIOS con ON p.ID_CONDOMINIO = con.ID_CONDOMINIO
+        WHERE p.ID_CONDOMINIO = ?;
+      `;
+
+      mysqlConnection.query(queryPersonas, [ID_CONDOMINIO], (err, personasResults) => {
+        if (err) {
+          console.error('Error al obtener personas del mismo condominio:', err);
+          return res.status(500).json({ error: 'Error al obtener personas del mismo condominio' });
+        }
+
+        // Retornar los resultados a la aplicación Flutter
+        res.json(personasResults);
+      });
+    });
+  });
+});
 
 //********** Insertar Reserva *****
 app.post('/nueva_reserva', (req, res) => {
@@ -1190,30 +1305,7 @@ app.get('/parentesco', (req, res) => {
   });
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //********* NUEVA PERSONA*********
-
 app.post('/nueva_persona', (req, res) => {
   const { usuarioId, P_DNI, P_TIPO_CONTACTO, P_CONTACTO, P_PARENTESCO, P_CONDOMINIO } = req.body;
 
@@ -1337,7 +1429,6 @@ app.post('/nueva_persona', (req, res) => {
                     }
 
                     const emailList = adminEmails.map(row => row.EMAIL);
-
                     const mailOptions = {
                       from: 'tuemail@dominio.com',
                       to: emailList,
@@ -1350,7 +1441,6 @@ app.post('/nueva_persona', (req, res) => {
                         console.error('Error al enviar el correo:', err);
                         return res.status(500).json({ error: 'Error al enviar el correo' });
                       }
-
                       console.log('Correo enviado a:', emailList);
                     });
                   });
@@ -1365,11 +1455,6 @@ app.post('/nueva_persona', (req, res) => {
     });
   });
 });
-
-
-
-
-
 
 
 
