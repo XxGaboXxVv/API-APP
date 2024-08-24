@@ -886,18 +886,32 @@ app.post('/validateQR', (req, res) => {
       }
 
       const qrInfo = results[0];
-      const fechaCreacion = moment(qrInfo.FECHA_CREACION).tz('America/Tegucigalpa');
-      const fechaVencimiento = fechaCreacion.add(qrVencimiento, 'hours').format('YYYY-MM-DD HH:mm:ss');
-      const fechaActual = moment().tz('America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss');
 
-      if (fechaActual > fechaVencimiento) {
-        return res.status(400).json({ message: 'Código QR expirado' });
-      }
+      // Consulta para obtener la fecha de creación de la visita
+      const visitaQuery = 'SELECT FECHA_HORA FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?';
+      mysqlConnection.query(visitaQuery, [qrInfo.ID_VISITANTE], (err, visitaResults) => {
+        if (err) {
+          console.error('Error al obtener la fecha de la visita:', err);
+          return res.status(500).json({ message: 'Error al obtener la fecha de la visita' });
+        }
+        if (visitaResults.length === 0) {
+          return res.status(404).json({ message: 'Visita no encontrada' });
+        }
 
-      res.status(200).json({ message: 'Código QR válido', qrInfo });
+        const fechaVisita = moment(visitaResults[0].FECHA_HORA).tz('America/Tegucigalpa').startOf('day');
+        const fechaVencimiento = fechaVisita.add(qrVencimiento, 'days').format('YYYY-MM-DD');
+        const fechaActual = moment().tz('America/Tegucigalpa').startOf('day').format('YYYY-MM-DD');
+
+        if (fechaActual > fechaVencimiento) {
+          return res.status(400).json({ message: 'Código QR expirado' });
+        }
+
+        res.status(200).json({ message: 'Código QR válido', qrInfo });
+      });
     });
   });
 });
+
 
 
 
