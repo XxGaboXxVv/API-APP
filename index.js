@@ -861,56 +861,31 @@ app.post('/registrar_visitas', async (req, res) => {
 app.post('/validateQR', (req, res) => {
   const { qrCode } = req.body;
 
-  // Consulta para obtener el valor del parámetro QR_VENCIMIENTO
-  const paramQuery = 'SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = "QR_VENCIMIENTO"';
-  mysqlConnection.query(paramQuery, (err, paramResults) => {
+  // Buscar el código QR en la base de datos
+  const searchQuery = 'SELECT * FROM TBL_QR WHERE QR_CODE = ?';
+  mysqlConnection.query(searchQuery, [qrCode], (err, results) => {
     if (err) {
-      console.error('Error al obtener el parámetro QR_VENCIMIENTO:', err);
-      return res.status(500).json({ message: 'Error al obtener el parámetro QR_VENCIMIENTO' });
+      console.error('Error al buscar el código QR:', err);
+      return res.status(500).json({ message: 'Error al buscar el código QR' });
     }
-    if (paramResults.length === 0) {
-      return res.status(404).json({ message: 'Parámetro QR_VENCIMIENTO no encontrado' });
+    
+    if (results.length === 0) {
+      return res.status(404).json({ message: 'Código QR no encontrado' });
     }
 
-    const qrVencimiento = parseInt(paramResults[0].VALOR, 10); // Convertir a número entero
+    const qrInfo = results[0];
+    const fechaActual = moment().tz('America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss');
 
-    // Consulta para buscar el código QR
-    const searchQuery = 'SELECT * FROM TBL_QR WHERE QR_CODE = ?';
-    mysqlConnection.query(searchQuery, [qrCode], (err, results) => {
-      if (err) {
-        console.error('Error al buscar el código QR:', err);
-        return res.status(500).json({ message: 'Error al buscar el código QR' });
-      }
-      if (results.length === 0) {
-        return res.status(404).json({ message: 'Código QR no encontrado' });
-      }
+    // Comparar la fecha actual con la fecha de vencimiento
+    if (fechaActual > qrInfo.FECHA_VENCIMIENTO) {
+      return res.status(400).json({ message: 'Código QR expirado' });
+    }
 
-      const qrInfo = results[0];
-
-      // Consulta para obtener la fecha de creación de la visita
-      const visitaQuery = 'SELECT FECHA_HORA FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?';
-      mysqlConnection.query(visitaQuery, [qrInfo.ID_VISITANTE], (err, visitaResults) => {
-        if (err) {
-          console.error('Error al obtener la fecha de la visita:', err);
-          return res.status(500).json({ message: 'Error al obtener la fecha de la visita' });
-        }
-        if (visitaResults.length === 0) {
-          return res.status(404).json({ message: 'Visita no encontrada' });
-        }
-
-        const fechaVisita = moment(visitaResults[0].FECHA_HORA).tz('America/Tegucigalpa').startOf('day');
-        const fechaVencimiento = fechaVisita.add(qrVencimiento, 'days').format('YYYY-MM-DD');
-        const fechaActual = moment().tz('America/Tegucigalpa').startOf('day').format('YYYY-MM-DD');
-
-        if (fechaActual > fechaVencimiento) {
-          return res.status(400).json({ message: 'Código QR expirado' });
-        }
-
-        res.status(200).json({ message: 'Código QR válido', qrInfo });
-      });
-    });
+    // Si el código QR es válido
+    res.status(200).json({ message: 'Código QR válido', qrInfo });
   });
 });
+
 
 
 
