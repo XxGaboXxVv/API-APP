@@ -861,14 +861,12 @@ app.post('/registrar_visitas', async (req, res) => {
 app.post('/validateQR', (req, res) => {
   const { qrCode } = req.body;
 
-  // Buscar el código QR en la base de datos
   const searchQuery = 'SELECT * FROM TBL_QR WHERE QR_CODE = ?';
   mysqlConnection.query(searchQuery, [qrCode], (err, results) => {
     if (err) {
       console.error('Error al buscar el código QR:', err);
       return res.status(500).json({ message: 'Error al buscar el código QR' });
     }
-    
     if (results.length === 0) {
       return res.status(404).json({ message: 'Código QR no encontrado' });
     }
@@ -876,15 +874,14 @@ app.post('/validateQR', (req, res) => {
     const qrInfo = results[0];
     const fechaActual = moment().tz('America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss');
 
-    // Comparar la fecha actual con la fecha de vencimiento
     if (fechaActual > qrInfo.FECHA_VENCIMIENTO) {
       return res.status(400).json({ message: 'Código QR expirado' });
     }
 
-    // Si el código QR es válido
     res.status(200).json({ message: 'Código QR válido', qrInfo });
   });
 });
+
 
 
 
