@@ -861,26 +861,44 @@ app.post('/registrar_visitas', async (req, res) => {
 app.post('/validateQR', (req, res) => {
   const { qrCode } = req.body;
 
-  const searchQuery = 'SELECT * FROM TBL_QR WHERE QR_CODE = ?';
-  mysqlConnection.query(searchQuery, [qrCode], (err, results) => {
+  // Consulta para obtener el valor del parámetro QR_VENCIMIENTO
+  const paramQuery = 'SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = "QR_VENCIMIENTO"';
+  mysqlConnection.query(paramQuery, (err, paramResults) => {
     if (err) {
-      console.error('Error al buscar el código QR:', err);
-      return res.status(500).json({ message: 'Error al buscar el código QR' });
+      console.error('Error al obtener el parámetro QR_VENCIMIENTO:', err);
+      return res.status(500).json({ message: 'Error al obtener el parámetro QR_VENCIMIENTO' });
     }
-    if (results.length === 0) {
-      return res.status(404).json({ message: 'Código QR no encontrado' });
-    }
-
-    const qrInfo = results[0];
-    const fechaActual = moment().tz('America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss');
-
-    if (fechaActual > qrInfo.FECHA_VENCIMIENTO) {
-      return res.status(400).json({ message: 'Código QR expirado' });
+    if (paramResults.length === 0) {
+      return res.status(404).json({ message: 'Parámetro QR_VENCIMIENTO no encontrado' });
     }
 
-    res.status(200).json({ message: 'Código QR válido', qrInfo });
+    const qrVencimiento = parseInt(paramResults[0].VALOR, 10); // Convertir a número entero
+
+    // Consulta para buscar el código QR
+    const searchQuery = 'SELECT * FROM TBL_QR WHERE QR_CODE = ?';
+    mysqlConnection.query(searchQuery, [qrCode], (err, results) => {
+      if (err) {
+        console.error('Error al buscar el código QR:', err);
+        return res.status(500).json({ message: 'Error al buscar el código QR' });
+      }
+      if (results.length === 0) {
+        return res.status(404).json({ message: 'Código QR no encontrado' });
+      }
+
+      const qrInfo = results[0];
+      const fechaCreacion = moment(qrInfo.FECHA_CREACION).tz('America/Tegucigalpa');
+      const fechaVencimiento = fechaCreacion.add(qrVencimiento, 'hours').format('YYYY-MM-DD HH:mm:ss');
+      const fechaActual = moment().tz('America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss');
+
+      if (fechaActual > fechaVencimiento) {
+        return res.status(400).json({ message: 'Código QR expirado' });
+      }
+
+      res.status(200).json({ message: 'Código QR válido', qrInfo });
+    });
   });
 });
+
 
 
 
