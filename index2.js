@@ -1,5 +1,5 @@
 const nodemailer = require('nodemailer');
-const mysql = require('mysql2');
+const mysql = require('mysql2/promise'); // Usa mysql2/promise
 const express = require('express');
 const bp = require('body-parser');
 const jwt = require('jsonwebtoken');
@@ -12,171 +12,142 @@ const SECRET_KEY = 'your_secret_key'; // Cambia esto por una clave secreta segur
 const app = express();
 app.use(bp.json());
 
-const mysqlConnection = mysql.createConnection({
- host:'srv1059.hstgr.io',
-    user:'u729991132_root',
-    password:'Dragonb@ll2',
-    database:'u729991132_railway',
-    port:3306,
-    multipleStatements: true
+const mysqlConnection = mysql.createPool({
+    host: 'srv1059.hstgr.io',
+    user: 'u729991132_root',
+    password: 'Dragonb@ll2',
+    database: 'u729991132_railway',
+    port: 3306,
+    waitForConnections: true,
+    connectionLimit: 50, // Ajusta según el rendimiento y necesidades
+    queueLimit: 0
 });
 
-mysqlConnection.connect((err) => {
-  if (!err) {
-    console.log('Conexión Exitosa');
-  } else {
-    console.error('Error al conectar a la DB:', err.code, err.message, err.stack);
-  }
-});
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-app.post('/login', (req, res) => {
-  const { username, password } = req.body;
+app.post('/login', async (req, res) => {
+    const { username, password } = req.body;
 
-  mysqlConnection.query(
-    "SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?",
-    [username],
-    (err, rows) => {
-      if (err) {
-        console.log(err);
-        return res.status(500).send("Error al buscar el usuario");
-      }
+    try {
+        const connection = await mysqlPool.getConnection();
+        
+        const [rows] = await connection.query(
+            "SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?",
+            [username]
+        );
+        connection.release(); // Libera la conexión de la piscina
 
-      if (rows.length === 0) {
-        return res.status(404).send("Usuario no encontrado");
-      }
+        if (rows.length === 0) {
+            return res.status(404).send("Usuario no encontrado");
+        }
 
-      const user = rows[0];
+        const user = rows[0];
 
-      // Generar token al inicio
-      const generateToken = () => {
-        return jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
-          expiresIn: 8400 // 90 minutos
-        });
-      };
+        // Generar token al inicio
+        const generateToken = () => {
+            return jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
+                expiresIn: 8400 // 90 minutos
+            });
+        };
 
-      const token = generateToken();  // Generar el token
+        const token = generateToken();  // Generar el token
 
-      if (user.ID_ESTADO_USUARIO === 5) {
-        mysqlConnection.query(
-          "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1",
-          (err, adminRows) => {
-            if (err) {
-              console.log(err);
-              return res.status(500).send("Error al obtener correos de administradores");
-            }
+        if (user.ID_ESTADO_USUARIO === 5) {
+            const connection = await mysqlPool.getConnection();
+            const [adminRows] = await connection.query(
+                "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1"
+            );
+            connection.release(); // Libera la conexión de la piscina
 
             const adminEmails = adminRows.map(admin => admin.EMAIL);
             return res.status(402).json({
-              message: "Comuníquese con los administradores para el uso de la aplicación",
-              adminEmails: adminEmails,
-              token: token  // Enviar token en la respuesta
+                message: "Comuníquese con los administradores para el uso de la aplicación",
+                adminEmails: adminEmails,
+                token: token  // Enviar token en la respuesta
             });
-          }
-        );
-      } else if (user.ID_ESTADO_USUARIO === 2) {
-        return res.status(403).send("Usuario inactivo");
-      } else if (user.ID_ESTADO_USUARIO === 3) {
-        return res.status(403).send("Usuario ha sido bloqueado");
-      } else {
-        const passwordIsValid = bcrypt.compareSync(password, user.CONTRASEÑA);
-
-        if (!passwordIsValid) {
-          mysqlConnection.query(
-            "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?",
-            [username],
-            (err) => {
-              if (err) {
-                console.log(err);
-                return res.status(500).send("Error al actualizar los intentos fallidos");
-              }
-
-              mysqlConnection.query(
-                "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 1",
-                (err, paramRows) => {
-                  if (err) {
-                    console.log(err);
-                    return res.status(500).send("Error al consultar los parámetros");
-                  }
-
-                  const maxLoginAttempts = parseInt(paramRows[0].VALOR, 10);
-                  if (user.INTENTOS_FALLIDOS + 1 >= maxLoginAttempts + 1) {
-                    mysqlConnection.query(
-                      "UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 3 WHERE EMAIL = ?",
-                      [username],
-                      (err) => {
-                        if (err) {
-                          console.log(err);
-                          return res.status(500).send("Error al bloquear el usuario");
-                        }
-
-                        return res.status(403).send("Usuario ha sido bloqueado por múltiples intentos fallidos");
-                      }
-                    );
-                  } else {
-                    return res.status(401).send("Contraseña incorrecta");
-                  }
-                }
-              );
-            }
-          );
+        } else if (user.ID_ESTADO_USUARIO === 2) {
+            return res.status(403).send("Usuario inactivo");
+        } else if (user.ID_ESTADO_USUARIO === 3) {
+            return res.status(403).send("Usuario ha sido bloqueado");
         } else {
-          // Actualizar los campos INTENTOS_FALLIDOS y PRIMER_INGRESO después de verificar la contraseña
-          mysqlConnection.query(
-            "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = 0, PRIMER_INGRESO = IF(PRIMER_INGRESO IS NULL, CONVERT_TZ(NOW(), @@session.time_zone, '-06:00'), PRIMER_INGRESO) WHERE EMAIL = ?",
-            [username],
-            (err) => {
-              if (err) {
-                console.log(err);
-                return res.status(500).send("Error al actualizar el usuario");
-              }
+            const passwordIsValid = bcrypt.compareSync(password, user.CONTRASEÑA);
 
-              if (user.ID_ESTADO_USUARIO === 1 && user.PRIMER_INGRESO_COMPLETADO === 0) {
-                // Redirigir al usuario a la página de completar información
-                res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/completar_persona' });
-              } else if (user.CODIGO_2FA === 1) {
-                // Generar y enviar código de verificación
-                const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase(); // Código de 6 dígitos en mayúsculas
-                mysqlConnection.query(
-                  "UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = ? WHERE EMAIL = ?",
-                  [verificationCode, username],
-                  (err) => {
-                    if (err) {
-                      console.log(err);
-                      return res.status(500).send("Error al actualizar el código de verificación");
-                    }
+            if (!passwordIsValid) {
+                const connection = await mysqlPool.getConnection();
+                await connection.query(
+                    "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?",
+                    [username]
+                );
+
+                const [paramRows] = await connection.query(
+                    "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 1"
+                );
+                connection.release(); // Libera la conexión de la piscina
+
+                const maxLoginAttempts = parseInt(paramRows[0].VALOR, 10);
+                if (user.INTENTOS_FALLIDOS + 1 >= maxLoginAttempts + 1) {
+                    const connection = await mysqlPool.getConnection();
+                    await connection.query(
+                        "UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 3 WHERE EMAIL = ?",
+                        [username]
+                    );
+                    connection.release(); // Libera la conexión de la piscina
+
+                    return res.status(403).send("Usuario ha sido bloqueado por múltiples intentos fallidos");
+                } else {
+                    return res.status(401).send("Contraseña incorrecta");
+                }
+            } else {
+                // Actualizar los campos INTENTOS_FALLIDOS y PRIMER_INGRESO después de verificar la contraseña
+                const connection = await mysqlPool.getConnection();
+                await connection.query(
+                    "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = 0, PRIMER_INGRESO = IF(PRIMER_INGRESO IS NULL, CONVERT_TZ(NOW(), @@session.time_zone, '-06:00'), PRIMER_INGRESO) WHERE EMAIL = ?",
+                    [username]
+                );
+
+                if (user.ID_ESTADO_USUARIO === 1 && user.PRIMER_INGRESO_COMPLETADO === 0) {
+                    // Redirigir al usuario a la página de completar información
+                    res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/completar_persona' });
+                } else if (user.CODIGO_2FA === 1) {
+                    // Generar y enviar código de verificación
+                    const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase(); // Código de 6 dígitos en mayúsculas
+
+                    await connection.query(
+                        "UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = ? WHERE EMAIL = ?",
+                        [verificationCode, username]
+                    );
 
                     const mailOptions = {
-                      from: 'no-reply@yourdomain.com',
-                      to: username,
-                      subject: 'Código de Verificación 2FA',
-                      text: `Tu código de verificación es: ${verificationCode}`
+                        from: 'no-reply@yourdomain.com',
+                        to: username,
+                        subject: 'Código de Verificación 2FA',
+                        text: `Tu código de verificación es: ${verificationCode}`
                     };
 
                     transporter.sendMail(mailOptions, (error, info) => {
-                      if (error) {
-                        console.log(error);
-                        return res.status(500).send("Error al enviar el código de verificación");
-                      }
-                      // Enviar respuesta con el token y redirección para la verificación de código
-                      res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/validar_codigo_2fa' });
+                        if (error) {
+                            console.log(error);
+                            return res.status(500).send("Error al enviar el código de verificación");
+                        }
+                        // Enviar respuesta con el token y redirección para la verificación de código
+                        res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/validar_codigo_2fa' });
                     });
-                  }
-                );
-              } else {
-                // Si no se requiere 2FA, simplemente retorna el token y redirige
-                res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/pantalla_principal' });
-              }
+                } else {
+                    // Si no se requiere 2FA, simplemente retorna el token y redirige
+                    res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/pantalla_principal' });
+                }
+
+                connection.release(); // Libera la conexión de la piscina
             }
-          );
         }
-      }
+    } catch (err) {
+        console.error('Error en la operación de base de datos:', err);
+        res.status(500).send("Error interno del servidor");
     }
-  );
 });
 
 
