@@ -520,7 +520,7 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     connection.release();
 
     // Generar el token
-    const token = jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
+    token = jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
       expiresIn: 8400 // 90 minutos
     });
 
