@@ -18,8 +18,8 @@ const mysqlPool  = mysql.createPool({
     password: 'Dragonb@ll2',
     database: 'u729991132_railway',
     port: 3306,
-    waitForConnections: true,
-    connectionLimit: 50, // Ajusta según el rendimiento y necesidades
+    waitForPools: true,
+    PoolLimit: 50, // Ajusta según el rendimiento y necesidades
     queueLimit: 0
 });
 
@@ -33,13 +33,13 @@ app.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
     try {
-        const connection = await mysqlPool.getConnection();
+        const Pool = await mysqlPool.getPool();
         
-        const [rows] = await connection.query(
+        const [rows] = await Pool.query(
             "SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?",
             [username]
         );
-        connection.release(); // Libera la conexión de la piscina
+        Pool.release(); // Libera la conexión de la piscina
 
         if (rows.length === 0) {
             return res.status(404).send("Usuario no encontrado");
@@ -57,11 +57,11 @@ app.post('/login', async (req, res) => {
         const token = generateToken();  // Generar el token
 
         if (user.ID_ESTADO_USUARIO === 5) {
-            const connection = await mysqlPool.getConnection();
-            const [adminRows] = await connection.query(
+            const Pool = await mysqlPool.getPool();
+            const [adminRows] = await Pool.query(
                 "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1"
             );
-            connection.release(); // Libera la conexión de la piscina
+            Pool.release(); // Libera la conexión de la piscina
 
             const adminEmails = adminRows.map(admin => admin.EMAIL);
             return res.status(402).json({
@@ -77,25 +77,25 @@ app.post('/login', async (req, res) => {
             const passwordIsValid = bcrypt.compareSync(password, user.CONTRASEÑA);
 
             if (!passwordIsValid) {
-                const connection = await mysqlPool.getConnection();
-                await connection.query(
+                const Pool = await mysqlPool.getPool();
+                await Pool.query(
                     "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?",
                     [username]
                 );
 
-                const [paramRows] = await connection.query(
+                const [paramRows] = await Pool.query(
                     "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 1"
                 );
-                connection.release(); // Libera la conexión de la piscina
+                Pool.release(); // Libera la conexión de la piscina
 
                 const maxLoginAttempts = parseInt(paramRows[0].VALOR, 10);
                 if (user.INTENTOS_FALLIDOS + 1 >= maxLoginAttempts + 1) {
-                    const connection = await mysqlPool.getConnection();
-                    await connection.query(
+                    const Pool = await mysqlPool.getPool();
+                    await Pool.query(
                         "UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 3 WHERE EMAIL = ?",
                         [username]
                     );
-                    connection.release(); // Libera la conexión de la piscina
+                    Pool.release(); // Libera la conexión de la piscina
 
                     return res.status(403).send("Usuario ha sido bloqueado por múltiples intentos fallidos");
                 } else {
@@ -103,8 +103,8 @@ app.post('/login', async (req, res) => {
                 }
             } else {
                 // Actualizar los campos INTENTOS_FALLIDOS y PRIMER_INGRESO después de verificar la contraseña
-                const connection = await mysqlPool.getConnection();
-                await connection.query(
+                const Pool = await mysqlPool.getPool();
+                await Pool.query(
                     "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = 0, PRIMER_INGRESO = IF(PRIMER_INGRESO IS NULL, CONVERT_TZ(NOW(), @@session.time_zone, '-06:00'), PRIMER_INGRESO) WHERE EMAIL = ?",
                     [username]
                 );
@@ -116,7 +116,7 @@ app.post('/login', async (req, res) => {
                     // Generar y enviar código de verificación
                     const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase(); // Código de 6 dígitos en mayúsculas
 
-                    await connection.query(
+                    await Pool.query(
                         "UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = ? WHERE EMAIL = ?",
                         [verificationCode, username]
                     );
@@ -141,7 +141,7 @@ app.post('/login', async (req, res) => {
                     res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/pantalla_principal' });
                 }
 
-                connection.release(); // Libera la conexión de la piscina
+                Pool.release(); // Libera la conexión de la piscina
             }
         }
     } catch (err) {
@@ -179,10 +179,10 @@ app.post('/validar_codigo_2fa', async (req, res) => {
   const { ID_USUARIO, CODIGO_VERIFICACION } = req.body;
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
     
-    const [results] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [ID_USUARIO]);
-    connection.release();
+    const [results] = await Pool.query('SELECT * FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [ID_USUARIO]);
+    Pool.release();
 
     if (results.length === 0) {
       return res.status(400).json({ message: 'Usuario no encontrado' });
@@ -194,7 +194,7 @@ app.post('/validar_codigo_2fa', async (req, res) => {
       return res.status(400).json({ message: 'Código de verificación incorrecto' });
     }
 
-    await connection.query('UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = NULL WHERE ID_USUARIO = ?', [ID_USUARIO]);
+    await Pool.query('UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = NULL WHERE ID_USUARIO = ?', [ID_USUARIO]);
 
     const generateToken = () => {
       return jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
@@ -232,9 +232,9 @@ app.post('/set2FAStatus', async (req, res) => {
       return res.status(400).json({ message: 'Valor inválido para 2FA' });
     }
 
-    const connection = await mysqlPool.getConnection();
-    await connection.query('UPDATE TBL_MS_USUARIO SET CODIGO_2FA = ? WHERE ID_USUARIO = ?', [enabled, userId]);
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    await Pool.query('UPDATE TBL_MS_USUARIO SET CODIGO_2FA = ? WHERE ID_USUARIO = ?', [enabled, userId]);
+    Pool.release();
 
     res.json({ message: 'Estado de 2FA actualizado correctamente' });
   } catch (error) {
@@ -258,9 +258,9 @@ app.get('/get2FAStatus', async (req, res) => {
     const decoded = jwt.verify(token, SECRET_KEY);
     const userId = decoded.id;
 
-    const connection = await mysqlPool.getConnection();
-    const [results] = await connection.query('SELECT CODIGO_2FA FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [userId]);
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    const [results] = await Pool.query('SELECT CODIGO_2FA FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [userId]);
+    Pool.release();
 
     if (results.length > 0) {
       res.json({ enabled: results[0].CODIGO_2FA });
@@ -302,12 +302,12 @@ app.post('/register', async (req, res) => {
   try {
     const hashedPassword = await bcrypt.hash(CONTRASEÑA, 8);
 
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
     
-    const [results] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
+    const [results] = await Pool.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
     
     if (results.length > 0) {
-      connection.release();
+      Pool.release();
       return res.status(400).json({ message: 'Correo ya registrado' });
     }
 
@@ -317,15 +317,15 @@ app.post('/register', async (req, res) => {
     encryptedVerificationCode += cipher.final('hex');
 
     const query = 'INSERT INTO TBL_MS_USUARIO (NOMBRE_USUARIO, EMAIL, CONTRASEÑA, CODIGO_VERIFICACION, ID_ROL, ID_ESTADO_USUARIO, CODIGO_2FA) VALUES (?, ?, ?, ?, ?, ?, ?)';
-    const [insertResults] = await connection.query(query, [NOMBRE_USUARIO, EMAIL, hashedPassword, encryptedVerificationCode, 2, 5, 1]);
+    const [insertResults] = await Pool.query(query, [NOMBRE_USUARIO, EMAIL, hashedPassword, encryptedVerificationCode, 2, 5, 1]);
 
     const userId = insertResults.insertId; // Obtener el ID del usuario recién insertado
 
     // Insertar NOMBRE_USUARIO en la tabla TBL_PERSONAS
     const personaQuery = 'INSERT INTO TBL_PERSONAS (NOMBRE_PERSONA) VALUES (?)';
-    await connection.query(personaQuery, [NOMBRE_USUARIO]);
+    await Pool.query(personaQuery, [NOMBRE_USUARIO]);
 
-    connection.release();
+    Pool.release();
 
     // Enviar el correo de verificación
     const mailOptions = {
@@ -365,25 +365,25 @@ app.post('/verify', async (req, res) => {
   const { EMAIL, CODIGO_VERIFICACION } = req.body;
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
     
-    const [results] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
+    const [results] = await Pool.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
     
     if (results.length === 0) {
-      connection.release();
+      Pool.release();
       return res.status(400).json({ message: 'Correo no encontrado' });
     }
 
     const user = results[0];
 
     if (user.INTENTOS_FALLIDOS >= 5) {
-      await connection.query('DELETE FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
-      connection.release();
+      await Pool.query('DELETE FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
+      Pool.release();
       return res.status(400).json({ message: 'Has alcanzado el límite de intentos de verificación.' });
     }
 
     if (user.CODIGO_VERIFICACION === null) {
-      connection.release();
+      Pool.release();
       return res.status(400).json({ message: 'No hay un código de verificación disponible para este usuario' });
     }
 
@@ -395,25 +395,25 @@ app.post('/verify', async (req, res) => {
       decryptedVerificationCode += decipher.final('utf8');
     } catch (error) {
       console.error('Error al descifrar el código:', error);
-      connection.release();
+      Pool.release();
       return res.status(500).json({ message: 'Error al procesar el código de verificación' });
     }
 
     if (CODIGO_VERIFICACION !== decryptedVerificationCode) {
-      await connection.query('UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?', [EMAIL]);
-      connection.release();
+      await Pool.query('UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?', [EMAIL]);
+      Pool.release();
       return res.status(400).json({ message: 'Código de verificación incorrecto' });
     }
 
     const primerIngreso = moment().tz("America/Tegucigalpa").format('YYYY-MM-DD HH:mm:ss');
 
-    const [parametroResults] = await connection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 2');
+    const [parametroResults] = await Pool.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 2');
     const diasVencimiento = parseInt(parametroResults[0].VALOR, 10);
     const fechaVencimiento = moment().add(diasVencimiento, 'days').format('YYYY-MM-DD');
 
-    await connection.query('UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = NULL, PRIMER_INGRESO = ?, FECHA_VENCIMIENTO = ?, ID_ESTADO_USUARIO = 5, INTENTOS_FALLIDOS = 0 WHERE EMAIL = ?', [primerIngreso, fechaVencimiento, EMAIL]);
+    await Pool.query('UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = NULL, PRIMER_INGRESO = ?, FECHA_VENCIMIENTO = ?, ID_ESTADO_USUARIO = 5, INTENTOS_FALLIDOS = 0 WHERE EMAIL = ?', [primerIngreso, fechaVencimiento, EMAIL]);
 
-    connection.release();
+    Pool.release();
 
     res.status(200).json({ message: 'Correo verificado exitosamente' });
   } catch (error) {
@@ -433,13 +433,13 @@ app.post('/restablecer_contrasena', async (req, res) => {
   }
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
     
     // Verificar si el usuario existe
-    const [userResults] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [email]);
+    const [userResults] = await Pool.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [email]);
     
     if (userResults.length === 0) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
@@ -447,12 +447,12 @@ app.post('/restablecer_contrasena', async (req, res) => {
     const hashedTempPassword = await bcrypt.hash(tempPassword, 10);
 
     // Eliminar cualquier entrada existente para el usuario en TBL_REINICIO_CONTRASEÑA
-    await connection.query('DELETE FROM TBL_REINICIO_CONTRASEÑA WHERE EMAIL = ?', [email]);
+    await Pool.query('DELETE FROM TBL_REINICIO_CONTRASEÑA WHERE EMAIL = ?', [email]);
 
     // Insertar la nueva entrada en TBL_REINICIO_CONTRASEÑA
-    await connection.query('INSERT INTO TBL_REINICIO_CONTRASEÑA (TOKEN, EMAIL) VALUES (?, ?)', [hashedTempPassword, email]);
+    await Pool.query('INSERT INTO TBL_REINICIO_CONTRASEÑA (TOKEN, EMAIL) VALUES (?, ?)', [hashedTempPassword, email]);
 
-    connection.release();
+    Pool.release();
 
     const mailOptions = {
       from: 'no-reply@yourdomain.com',
@@ -482,13 +482,13 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
   }
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
     
     // Verificar el token
-    const [tokenResults] = await connection.query('SELECT * FROM TBL_REINICIO_CONTRASEÑA WHERE EMAIL = ?', [email]);
+    const [tokenResults] = await Pool.query('SELECT * FROM TBL_REINICIO_CONTRASEÑA WHERE EMAIL = ?', [email]);
 
     if (tokenResults.length === 0) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ message: 'Token no encontrado' });
     }
 
@@ -496,28 +496,28 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     const isMatch = await bcrypt.compare(tempPassword, token.TOKEN);
 
     if (!isMatch) {
-      connection.release();
+      Pool.release();
       return res.status(400).json({ message: 'Contraseña temporal incorrecta' });
     }
 
     // Obtener los datos del usuario
-    const [userResults] = await connection.query('SELECT ID_USUARIO, CONTRASEÑA FROM TBL_MS_USUARIO WHERE EMAIL = ?', [email]);
+    const [userResults] = await Pool.query('SELECT ID_USUARIO, CONTRASEÑA FROM TBL_MS_USUARIO WHERE EMAIL = ?', [email]);
 
     if (userResults.length === 0) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
     const user = userResults[0];
 
     // Insertar en TBL_MS_HIST_CONTRASEÑA
-    await connection.query('INSERT INTO TBL_MS_HIST_CONTRASEÑA (ID_USUARIO, CONTRASEÑA) VALUES (?, ?)', [user.ID_USUARIO, user.CONTRASEÑA]);
+    await Pool.query('INSERT INTO TBL_MS_HIST_CONTRASEÑA (ID_USUARIO, CONTRASEÑA) VALUES (?, ?)', [user.ID_USUARIO, user.CONTRASEÑA]);
 
     // Actualizar la contraseña, estado e intentos fallidos en TBL_MS_USUARIO
     const hashedTempPassword = await bcrypt.hash(tempPassword, 10);
-    await connection.query('UPDATE TBL_MS_USUARIO SET CONTRASEÑA = ?, ID_ESTADO_USUARIO = 1, INTENTOS_FALLIDOS = 0 WHERE ID_USUARIO = ?', [hashedTempPassword, user.ID_USUARIO]);
+    await Pool.query('UPDATE TBL_MS_USUARIO SET CONTRASEÑA = ?, ID_ESTADO_USUARIO = 1, INTENTOS_FALLIDOS = 0 WHERE ID_USUARIO = ?', [hashedTempPassword, user.ID_USUARIO]);
 
-    connection.release();
+    Pool.release();
 
     // Generar el token
     token = jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
@@ -550,13 +550,13 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     const decoded = jwt.verify(token, SECRET_KEY);
     const userId = decoded.id;
 
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
 
     // Consultar la contraseña actual del usuario desde la base de datos
-    const [userResults] = await connection.query('SELECT CONTRASEÑA FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [userId]);
+    const [userResults] = await Pool.query('SELECT CONTRASEÑA FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [userId]);
 
     if (userResults.length === 0) {
-      connection.release();
+      Pool.release();
       console.error('Usuario no encontrado');
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -566,7 +566,7 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     // Verificar si la nueva contraseña es igual a la actual
     const isSamePassword = await bcrypt.compare(nueva, contrasenaActual);
     if (isSamePassword) {
-      connection.release();
+      Pool.release();
       console.error('No puedes reutilizar la contraseña actual');
       return res.status(400).json({ message: 'No puedes reutilizar la contraseña actual' });
     }
@@ -574,7 +574,7 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     // Verificar si la contraseña actual proporcionada es correcta
     const isMatch = await bcrypt.compare(actual, contrasenaActual);
     if (!isMatch) {
-      connection.release();
+      Pool.release();
       console.error('Contraseña actual incorrecta');
       return res.status(401).json({ message: 'Contraseña actual incorrecta' });
     }
@@ -583,12 +583,12 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     const nuevaHashed = await bcrypt.hash(nueva, 10);
 
     // Insertar la contraseña actual en la tabla TBL_MS_HIST_CONTRASEÑA
-    await connection.query('INSERT INTO TBL_MS_HIST_CONTRASEÑA (ID_USUARIO, CONTRASEÑA) VALUES (?, ?)', [userId, contrasenaActual]);
+    await Pool.query('INSERT INTO TBL_MS_HIST_CONTRASEÑA (ID_USUARIO, CONTRASEÑA) VALUES (?, ?)', [userId, contrasenaActual]);
 
     // Actualizar la nueva contraseña en la tabla TBL_MS_USUARIO
-    await connection.query('UPDATE TBL_MS_USUARIO SET CONTRASEÑA = ? WHERE ID_USUARIO = ?', [nuevaHashed, userId]);
+    await Pool.query('UPDATE TBL_MS_USUARIO SET CONTRASEÑA = ? WHERE ID_USUARIO = ?', [nuevaHashed, userId]);
 
-    connection.release();
+    Pool.release();
 
     res.status(200).json({ message: 'Contraseña actualizada correctamente' });
   } catch (error) {
@@ -620,33 +620,33 @@ app.post('/registrar_visitas', async (req, res) => {
   const { usuarioId, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, isRecurrentVisitor, FECHA_VENCIMIENTO } = req.body;
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
 
     // Obtener el NOMBRE_USUARIO usando el usuarioId
-    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
+    const [usuarioResults] = await Pool.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (usuarioResults.length === 0) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
     // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+    const [personaResults] = await Pool.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (personaResults.length === 0) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
     const ID_PERSONA = personaResults[0].ID_PERSONA;
 
     // Obtener el valor del parámetro con ID_PARAMETRO = 3
-    const [parametroResults] = await connection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 3');
+    const [parametroResults] = await Pool.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 3');
 
     if (parametroResults.length === 0) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ message: 'Parámetro no encontrado' });
     }
 
@@ -665,7 +665,7 @@ app.post('/registrar_visitas', async (req, res) => {
       insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada];
     }
 
-    const [result] = await connection.query(insertQuery, insertParams);
+    const [result] = await Pool.query(insertQuery, insertParams);
 
     // Insertar en la tabla TBL_BITACORA_VISITA
     const ID_VISITANTE = result.insertId; // Obtener el ID del visitante registrado
@@ -680,10 +680,10 @@ app.post('/registrar_visitas', async (req, res) => {
       insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada];
     }
 
-    await connection.query(insertBitacoraQuery, insertBitacoraParams);
+    await Pool.query(insertBitacoraQuery, insertBitacoraParams);
 
     // Obtener la información adicional del QR
-    const [personaInfoResults] = await connection.query(`
+    const [personaInfoResults] = await Pool.query(`
       SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION AS ID_CONDOMINIO
       FROM TBL_PERSONAS p
       LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
@@ -691,7 +691,7 @@ app.post('/registrar_visitas', async (req, res) => {
       WHERE p.ID_PERSONA = ?`, [ID_PERSONA]);
 
     if (personaInfoResults.length === 0) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ message: 'Información del QR no encontrada' });
     }
 
@@ -732,9 +732,9 @@ app.post('/registrar_visitas', async (req, res) => {
     });
 
     const insertQRQuery = 'INSERT INTO TBL_QR (ID_VISITANTE, QR_CODE, FECHA_VENCIMIENTO) VALUES (?, ?, ?)';
-    await connection.query(insertQRQuery, [ID_VISITANTE, qrUrl, isRecurrentVisitor ? FECHA_VENCIMIENTO : fechaCalculada]);
+    await Pool.query(insertQRQuery, [ID_VISITANTE, qrUrl, isRecurrentVisitor ? FECHA_VENCIMIENTO : fechaCalculada]);
 
-    connection.release();
+    Pool.release();
 
     res.status(201).json({
       message: isRecurrentVisitor ? 'Visitante recurrente registrado exitosamente' : 'Visita registrada exitosamente',
@@ -756,13 +756,13 @@ app.post('/validateQR', async (req, res) => {
   const { qrCode } = req.body;
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
 
     // Consultar el código QR
-    const [results] = await connection.query('SELECT * FROM TBL_QR WHERE QR_CODE = ?', [qrCode]);
+    const [results] = await Pool.query('SELECT * FROM TBL_QR WHERE QR_CODE = ?', [qrCode]);
 
     if (results.length === 0) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ message: 'Código QR no encontrado' });
     }
 
@@ -770,11 +770,11 @@ app.post('/validateQR', async (req, res) => {
     const fechaActual = moment().tz('America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss');
 
     if (fechaActual > qrInfo.FECHA_VENCIMIENTO) {
-      connection.release();
+      Pool.release();
       return res.status(400).json({ message: 'Código QR expirado' });
     }
 
-    connection.release();
+    Pool.release();
     res.status(200).json({ message: 'Código QR válido', qrInfo });
   } catch (error) {
     console.error('Error al validar el código QR:', error);
@@ -802,9 +802,9 @@ app.get('/anuncios_eventos', async (req, res) => {
     ORDER BY FECHA_HORA DESC`;
 
   try {
-    const connection = await mysqlPool.getConnection();
-    const [results] = await connection.query(query, [usuarioId]);
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    const [results] = await Pool.query(query, [usuarioId]);
+    Pool.release();
     res.status(200).json(results);
   } catch (error) {
     console.error('Error al obtener los anuncios:', error);
@@ -824,9 +824,9 @@ app.post('/ocultar_anuncio', async (req, res) => {
     VALUES (?, ?)`;
 
   try {
-    const connection = await mysqlPool.getConnection();
-    await connection.query(query, [usuarioId, anuncioId]);
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    await Pool.query(query, [usuarioId, anuncioId]);
+    Pool.release();
     res.status(200).send('Anuncio ocultado exitosamente');
   } catch (error) {
     console.error('Error al ocultar el anuncio:', error);
@@ -845,9 +845,9 @@ app.get('/perfil', async (req, res) => {
     WHERE ID_USUARIO = ?`;
 
   try {
-    const connection = await mysqlPool.getConnection();
-    const [results] = await connection.query(query, [usuarioId]);
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    const [results] = await Pool.query(query, [usuarioId]);
+    Pool.release();
 
     if (results.length > 0) {
       res.status(200).json(results[0]);
@@ -867,23 +867,23 @@ app.get('/consultar_reservaciones', async (req, res) => {
   const usuarioId = req.query.usuario_id;
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
 
     // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
-    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
+    const [usuarioResults] = await Pool.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (!usuarioResults.length) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
     // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+    const [personaResults] = await Pool.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
@@ -909,9 +909,9 @@ app.get('/consultar_reservaciones', async (req, res) => {
         r.ID_PERSONA = ?
     `;
 
-    const [reservasResults] = await connection.query(query, [ID_PERSONA]);
+    const [reservasResults] = await Pool.query(query, [ID_PERSONA]);
 
-    connection.release();
+    Pool.release();
 
     res.json(reservasResults);
   } catch (error) {
@@ -926,23 +926,23 @@ app.get('/consultar_visitas', async (req, res) => {
   const usuarioId = req.query.usuario_id;
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
 
     // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
-    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
+    const [usuarioResults] = await Pool.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (!usuarioResults.length) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
     // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+    const [personaResults] = await Pool.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
@@ -960,13 +960,13 @@ app.get('/consultar_visitas', async (req, res) => {
       FROM TBL_VISITANTES_RECURRENTES 
       WHERE ID_PERSONA = ?`;
 
-    const [regVisitasResults] = await connection.query(queryRegVisitas, [ID_PERSONA]);
-    const [visitantesRecurrentesResults] = await connection.query(queryVisitantesRecurrentes, [ID_PERSONA]);
+    const [regVisitasResults] = await Pool.query(queryRegVisitas, [ID_PERSONA]);
+    const [visitantesRecurrentesResults] = await Pool.query(queryVisitantesRecurrentes, [ID_PERSONA]);
 
     // Combinar los resultados de ambas consultas
     const resultados = [...regVisitasResults, ...visitantesRecurrentesResults];
 
-    connection.release();
+    Pool.release();
 
     // Retornar los resultados a la aplicación Flutter
     res.json(resultados);
@@ -983,23 +983,23 @@ app.get('/consultar_familia', async (req, res) => {
   const usuarioId = req.query.usuario_id;
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
 
     // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
-    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
+    const [usuarioResults] = await Pool.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (!usuarioResults.length) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
     // Obtener el ID_PERSONA y el ID_CONDOMINIO de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await connection.query('SELECT ID_PERSONA, ID_CONDOMINIO FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+    const [personaResults] = await Pool.query('SELECT ID_PERSONA, ID_CONDOMINIO FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
@@ -1025,9 +1025,9 @@ app.get('/consultar_familia', async (req, res) => {
       WHERE p.ID_CONDOMINIO = ?;
     `;
 
-    const [personasResults] = await connection.query(queryPersonas, [ID_CONDOMINIO]);
+    const [personasResults] = await Pool.query(queryPersonas, [ID_CONDOMINIO]);
 
-    connection.release();
+    Pool.release();
 
     // Retornar los resultados a la aplicación Flutter
     res.json(personasResults);
@@ -1045,53 +1045,53 @@ app.post('/nueva_reserva', async (req, res) => {
   console.log('Datos recibidos:', req.body);
 
   try {
-    const connection = await mysqlPool.getConnection();
+    const Pool = await mysqlPool.getPool();
 
     // Obtener el NOMBRE_USUARIO usando el usuarioId
-    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
+    const [usuarioResults] = await Pool.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (!usuarioResults.length) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
     // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+    const [personaResults] = await Pool.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
     const ID_PERSONA = personaResults[0].ID_PERSONA;
 
     // Buscar ID_INSTALACION por nombre
-    const [instalacionResults] = await connection.query('SELECT ID_INSTALACION FROM TBL_INSTALACIONES WHERE NOMBRE_INSTALACION = ?', [nombreInstalacion]);
+    const [instalacionResults] = await Pool.query('SELECT ID_INSTALACION FROM TBL_INSTALACIONES WHERE NOMBRE_INSTALACION = ?', [nombreInstalacion]);
 
     if (!instalacionResults.length) {
-      connection.release();
+      Pool.release();
       return res.status(404).json({ error: 'Instalación no encontrada' });
     }
 
     const ID_INSTALACION = instalacionResults[0].ID_INSTALACION;
 
     // Verificar si ya existe una reserva para esa fecha y hora en la misma instalación
-    const [reservaResults] = await connection.query('SELECT * FROM TBL_RESERVAS WHERE ID_INSTALACION = ? AND HORA_FECHA = ?', [ID_INSTALACION, horaFecha]);
+    const [reservaResults] = await Pool.query('SELECT * FROM TBL_RESERVAS WHERE ID_INSTALACION = ? AND HORA_FECHA = ?', [ID_INSTALACION, horaFecha]);
 
     if (reservaResults.length > 0) {
-      connection.release();
+      Pool.release();
       return res.status(400).json({ error: 'Horario ya reservado' });
     }
 
     // Insertar la reserva si no hay conflicto
-    const [insertResult] = await connection.query(
+    const [insertResult] = await Pool.query(
       'INSERT INTO TBL_RESERVAS (ID_PERSONA, ID_INSTALACION, ID_ESTADO_RESERVA, TIPO_EVENTO, HORA_FECHA) VALUES (?, ?, 3, ?, ?)',
       [ID_PERSONA, ID_INSTALACION, tipoEvento, horaFecha]
     );
 
-    connection.release();
+    Pool.release();
     res.status(201).json({ message: 'Reserva creada exitosamente', reservaId: insertResult.insertId });
   } catch (error) {
     console.error('Error al crear la reserva:', error);
@@ -1104,9 +1104,9 @@ app.post('/nueva_reserva', async (req, res) => {
 // ******* Tipos de Instalaciones *******
 app.get('/instalaciones', async (req, res) => {
   try {
-    const connection = await mysqlPool.getConnection();
-    const [results] = await connection.query('SELECT NOMBRE_INSTALACION FROM TBL_INSTALACIONES');
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    const [results] = await Pool.query('SELECT NOMBRE_INSTALACION FROM TBL_INSTALACIONES');
+    Pool.release();
     res.json(results);
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
@@ -1138,9 +1138,9 @@ app.post('/set2FAStatus', async (req, res) => {
     }
 
     // Actualizar el estado de 2FA en la base de datos
-    const connection = await mysqlPool.getConnection();
-    await connection.query('UPDATE TBL_MS_USUARIO SET CODIGO_2FA = ? WHERE ID_USUARIO = ?', [enabled, userId]);
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    await Pool.query('UPDATE TBL_MS_USUARIO SET CODIGO_2FA = ? WHERE ID_USUARIO = ?', [enabled, userId]);
+    Pool.release();
 
     res.json({ message: 'Estado de 2FA actualizado correctamente' });
   } catch (error) {
@@ -1153,9 +1153,9 @@ app.post('/set2FAStatus', async (req, res) => {
 //************** PERSONAS *************
 app.get('/personas', async (req, res) => {
   try {
-    const connection = await mysqlPool.getConnection();
-    const [results] = await connection.query('SELECT DESCRIPCION FROM TBL_ESTADO_PERSONA');
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    const [results] = await Pool.query('SELECT DESCRIPCION FROM TBL_ESTADO_PERSONA');
+    Pool.release();
     res.json(results);
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
@@ -1165,9 +1165,9 @@ app.get('/personas', async (req, res) => {
 
 app.get('/contacto', async (req, res) => {
   try {
-    const connection = await mysqlPool.getConnection();
-    const [results] = await connection.query('SELECT DESCRIPCION FROM TBL_TIPO_CONTACTO');
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    const [results] = await Pool.query('SELECT DESCRIPCION FROM TBL_TIPO_CONTACTO');
+    Pool.release();
     res.json(results);
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
@@ -1178,9 +1178,9 @@ app.get('/contacto', async (req, res) => {
 
 app.get('/parentesco', async (req, res) => {
   try {
-    const connection = await mysqlPool.getConnection();
-    const [results] = await connection.query('SELECT DESCRIPCION FROM TBL_PARENTESCOS');
-    connection.release();
+    const Pool = await mysqlPool.getPool();
+    const [results] = await Pool.query('SELECT DESCRIPCION FROM TBL_PARENTESCOS');
+    Pool.release();
     res.json(results);
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
@@ -1197,7 +1197,7 @@ app.post('/nueva_persona', async (req, res) => {
 
   try {
     // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
-    const [usuarioResults] = await mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
+    const [usuarioResults] = await mysqlPool.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
     
     if (!usuarioResults.length) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
@@ -1206,7 +1206,7 @@ app.post('/nueva_persona', async (req, res) => {
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
     // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await mysqlConnection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+    const [personaResults] = await mysqlPool.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
       return res.status(404).json({ error: 'Persona no encontrada' });
@@ -1215,7 +1215,7 @@ app.post('/nueva_persona', async (req, res) => {
     const ID_PERSONA = personaResults[0].ID_PERSONA;
 
     // Verificación si el condominio existe
-    const [condominioResults] = await mysqlConnection.query('SELECT ID_CONDOMINIO FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO]);
+    const [condominioResults] = await mysqlPool.query('SELECT ID_CONDOMINIO FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO]);
 
     if (!condominioResults.length) {
       return res.status(404).json({ error: 'Condominio no encontrado' });
@@ -1224,14 +1224,14 @@ app.post('/nueva_persona', async (req, res) => {
     const ID_CONDOMINIO = condominioResults[0].ID_CONDOMINIO;
 
     // Verificar si hay un administrador (ID_PADRE = 1) para este condominio
-    const [adminResults] = await mysqlConnection.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO]);
+    const [adminResults] = await mysqlPool.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO]);
 
     const adminCount = adminResults[0].adminCount;
     const isAdminRequired = adminCount === 0; // Si no hay administrador, se debe insertar 1 en ID_PADRE
 
     // Consultar los IDs necesarios
-    const [tipoContactoResults] = await mysqlConnection.query('SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?', [P_TIPO_CONTACTO]);
-    const [parentescoResults] = await mysqlConnection.query('SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?', [P_PARENTESCO]);
+    const [tipoContactoResults] = await mysqlPool.query('SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?', [P_TIPO_CONTACTO]);
+    const [parentescoResults] = await mysqlPool.query('SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?', [P_PARENTESCO]);
 
     if (!tipoContactoResults.length || !parentescoResults.length) {
       return res.status(405).json({ error: 'Datos no encontrados' });
@@ -1241,7 +1241,7 @@ app.post('/nueva_persona', async (req, res) => {
     const ID_PARENTESCO = parentescoResults[0].ID_PARENTESCO;
 
     // Insertar contacto
-    const [contactoResults] = await mysqlConnection.query('INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)', [ID_TIPO_CONTACTO, P_CONTACTO]);
+    const [contactoResults] = await mysqlPool.query('INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)', [ID_TIPO_CONTACTO, P_CONTACTO]);
     const ID_CONTACTO = contactoResults.insertId;
 
     // Construir consulta de actualización de persona
@@ -1251,11 +1251,11 @@ app.post('/nueva_persona', async (req, res) => {
 
     const queryParams = [P_DNI, ID_CONTACTO, 1, ID_PARENTESCO, ID_CONDOMINIO, ID_PERSONA];
     
-    await mysqlConnection.query(updatePersonaQuery, queryParams);
+    await mysqlPool.query(updatePersonaQuery, queryParams);
 
     // Enviar correo si es el primer administrador
     if (isAdminRequired) {
-      const [adminEmails] = await mysqlConnection.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1');
+      const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1');
       const emailList = adminEmails.map(row => row.EMAIL);
       
       const mailOptions = {
@@ -1291,10 +1291,10 @@ app.put('/desactivarPersona', async (req, res) => {
   const updateQuery = 'UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?';
 
   try {
-    const connection = await mysqlPool.getConnection();
-    const [result] = await connection.query(updateQuery, [ID_USUARIO]);
+    const Pool = await mysqlPool.getPool();
+    const [result] = await Pool.query(updateQuery, [ID_USUARIO]);
 
-    connection.release();
+    Pool.release();
 
     if (result.affectedRows > 0) {
       res.status(200).json({ success: true, message: 'PRIMER_INGRESO_COMPLETADO actualizado correctamente' });
