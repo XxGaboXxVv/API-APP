@@ -1207,9 +1207,14 @@ app.post('/nueva_persona', async (req, res) => {
 
   console.log('Datos recibidos:', req.body);
 
+  let connection;
+
   try {
+    // Obtener una conexión del pool
+    connection = await mysqlPool.getConnection();
+
     // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
-    const [usuarioResults] = await mysqlConnection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
+    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (!usuarioResults.length) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
@@ -1218,7 +1223,7 @@ app.post('/nueva_persona', async (req, res) => {
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
     // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await mysqlConnection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
       return res.status(404).json({ error: 'Persona no encontrada' });
@@ -1227,7 +1232,7 @@ app.post('/nueva_persona', async (req, res) => {
     const ID_PERSONA = personaResults[0].ID_PERSONA;
 
     // Verificación si el condominio existe
-    const [condominioResults] = await mysqlConnection.query('SELECT ID_CONDOMINIO FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO]);
+    const [condominioResults] = await connection.query('SELECT ID_CONDOMINIO FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO]);
 
     if (!condominioResults.length) {
       return res.status(404).json({ error: 'Condominio no encontrado' });
@@ -1236,13 +1241,13 @@ app.post('/nueva_persona', async (req, res) => {
     const ID_CONDOMINIO = condominioResults[0].ID_CONDOMINIO;
 
     // Verificar si hay un administrador (ID_PADRE = 1) para este condominio
-    const [adminResults] = await mysqlConnection.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO]);
+    const [adminResults] = await connection.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO]);
 
     const adminCount = adminResults[0].adminCount;
     const isAdminRequired = adminCount === 0; // Si no hay administrador, se debe insertar 1 en ID_PADRE
 
     // Consultar el ID_TIPO_CONTACTO
-    const [tipoContactoResults] = await mysqlConnection.query('SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?', [P_TIPO_CONTACTO]);
+    const [tipoContactoResults] = await connection.query('SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?', [P_TIPO_CONTACTO]);
 
     if (!tipoContactoResults.length) {
       return res.status(405).json({ error: 'Tipo de contacto no encontrado' });
@@ -1251,7 +1256,7 @@ app.post('/nueva_persona', async (req, res) => {
     const ID_TIPO_CONTACTO = tipoContactoResults[0].ID_TIPO_CONTACTO;
 
     // Consultar el ID_PARENTESCO
-    const [parentescoResults] = await mysqlConnection.query('SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?', [P_PARENTESCO]);
+    const [parentescoResults] = await connection.query('SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?', [P_PARENTESCO]);
 
     if (!parentescoResults.length) {
       return res.status(405).json({ error: 'Parentesco no encontrado' });
@@ -1260,7 +1265,7 @@ app.post('/nueva_persona', async (req, res) => {
     const ID_PARENTESCO = parentescoResults[0].ID_PARENTESCO;
 
     // Insertar contacto
-    const [contactoResults] = await mysqlConnection.query('INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)', [ID_TIPO_CONTACTO, P_CONTACTO]);
+    const [contactoResults] = await connection.query('INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)', [ID_TIPO_CONTACTO, P_CONTACTO]);
     const ID_CONTACTO = contactoResults.insertId;
 
     // Construir consulta de actualización de persona
@@ -1270,11 +1275,11 @@ app.post('/nueva_persona', async (req, res) => {
 
     const queryParams = [P_DNI, ID_CONTACTO, 1, ID_PARENTESCO, ID_CONDOMINIO, ID_PERSONA];
     
-    await mysqlConnection.query(updatePersonaQuery, queryParams);
+    await connection.query(updatePersonaQuery, queryParams);
 
     // Enviar correo si es el primer administrador
     if (isAdminRequired) {
-      const [adminEmails] = await mysqlConnection.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1');
+      const [adminEmails] = await connection.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1');
       const emailList = adminEmails.map(row => row.EMAIL);
       
       const mailOptions = {
@@ -1293,6 +1298,9 @@ app.post('/nueva_persona', async (req, res) => {
   } catch (err) {
     console.error('Error en la operación:', err);
     res.status(500).json({ error: 'Error en la operación' });
+
+  } finally {
+    if (connection) connection.release(); // Liberar la conexión de vuelta al pool
   }
 });
 
