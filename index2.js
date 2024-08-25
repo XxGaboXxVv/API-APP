@@ -12,7 +12,7 @@ const SECRET_KEY = 'your_secret_key'; // Cambia esto por una clave secreta segur
 const app = express();
 app.use(bp.json());
 
-const mysqlPool = mysql.createPool({
+const mysqlConnection  = mysql.createPool({
     host: 'srv1059.hstgr.io',
     user: 'u729991132_root',
     password: 'Dragonb@ll2',
