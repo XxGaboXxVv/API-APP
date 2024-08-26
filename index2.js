@@ -1339,7 +1339,7 @@ app.post('/nueva_persona', async (req, res) => {
 
           const emailList = adminEmails.map(row => row.EMAIL);
           const mailOptions = {
-                      from: 'tuemail@dominio.com',
+                      from: 'villalasacacias@villalasacacias.com',
                       to: emailList,
                       subject: 'Registro de Nuevo Administrador de Condominio',
                       html: `
