@@ -523,7 +523,7 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
       return res.status(404).json({ message: 'Token no encontrado' });
     }
 
-    const token = tokenResults[0];
+    let token = tokenResults[0]; // Cambiado const por let
     const isMatch = await bcrypt.compare(tempPassword, token.TOKEN);
 
     if (!isMatch) {
@@ -561,6 +561,7 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     res.status(500).json({ message: 'Error al procesar la verificación de la contraseña temporal' });
   }
 });
+
 
   
   // ************  Ruta para actualizar la contraseña   **********
