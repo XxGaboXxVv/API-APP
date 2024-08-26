@@ -304,7 +304,7 @@ app.get('/get2FAStatus', async (req, res) => {
 
 //********** REGISTRO *********** 
 
-onst secretKey = crypto.randomBytes(32); // Clave secreta de 256 bits
+const secretKey = crypto.randomBytes(32); // Clave secreta de 256 bits
 const iv = Buffer.alloc(16, 0); // IV de 16 bytes
 
 // Cifrado
