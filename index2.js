@@ -29,6 +29,16 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+// SERVIDOR DE CORREO 
+const transporter = nodemailer.createTransport({
+    host: "smtp.hostinger.com",
+    port: 465,
+    auth: {
+      user: "villalasacacias@villalasacacias.com",
+      pass: "Dragonb@ll2"
+    }
+});
+
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
@@ -294,92 +304,178 @@ app.get('/get2FAStatus', async (req, res) => {
 
 //********** REGISTRO *********** 
 
-const secretKey = 'clave_secreta';
+onst secretKey = crypto.randomBytes(32); // Clave secreta de 256 bits
+const iv = Buffer.alloc(16, 0); // IV de 16 bytes
 
-// SERVIDOR DE CORREO MAILTRAP
-const transporter = nodemailer.createTransport({
-    host: "smtp.hostinger.com",
-    port: 465,
-    auth: {
-      user: "villalasacacias@villalasacacias.com",
-      pass: "Dragonb@ll2"
-    }
-});
+// Cifrado
+function encrypt(text) {
+  const cipher = crypto.createCipheriv('aes-256-cbc', secretKey, iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  return encrypted;
+}
+
+// Descifrado
+function decrypt(encryptedText) {
+  const decipher = crypto.createDecipheriv('aes-256-cbc', secretKey, iv);
+  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
 
 app.post('/register', async (req, res) => {
-    const { NOMBRE_USUARIO, EMAIL, CONTRASEÑA } = req.body;
+  const { NOMBRE_USUARIO, EMAIL, CONTRASEÑA } = req.body;
 
-    if (!NOMBRE_USUARIO || !EMAIL || !CONTRASEÑA) {
-        return res.status(400).json({ message: 'Todos los campos son requeridos' });
-    }
+  console.log('Iniciando proceso de registro.');
 
-    try {
-        const hashedPassword = await bcrypt.hash(CONTRASEÑA, 8);
-        const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+  if (!NOMBRE_USUARIO || !EMAIL || !CONTRASEÑA) {
+    console.error('Faltan campos requeridos:', { NOMBRE_USUARIO, EMAIL, CONTRASEÑA });
+    return res.status(400).json({ message: 'Todos los campos son requeridos' });
+  }
 
-        // Verificar si el correo ya está registrado
-        const [results] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
-        
-        if (results.length > 0) {
-            connection.release(); // Liberar la conexión
-            return res.status(400).json({ message: 'Correo ya registrado' });
-        }
+  try {
+    console.log('Cifrando contraseña.');
+    const hashedPassword = await bcrypt.hash(CONTRASEÑA, 8);
+    const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+    console.log('Conexión a la base de datos establecida.');
 
+    // Verificar si el correo ya está registrado y el estado de PRIMER_INGRESO_COMPLETADO
+    const [results] = await connection.query('SELECT NOMBRE_USUARIO, PRIMER_INGRESO_COMPLETADO, ID_USUARIO FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
+
+    if (results.length > 0) {
+      console.log('Correo ya registrado. Verificando estado de primer ingreso.');
+      const usuarioExistente = results[0];
+
+      if (usuarioExistente.PRIMER_INGRESO_COMPLETADO === 1) {
+        console.error('El usuario ya ha completado el primer ingreso.');
+        connection.release(); // Liberar la conexión
+        return res.status(400).json({ message: 'Correo ya registrado' });
+      } 
+      if (usuarioExistente.PRIMER_INGRESO_COMPLETADO === 0) {
+        console.log('Actualizando datos del usuario existente 0000.');
         const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase();
-        const cipher = crypto.createCipher('aes-128-cbc', secretKey);
+        const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(secretKey, 'hex'), Buffer.alloc(16, 0));
         let encryptedVerificationCode = cipher.update(verificationCode, 'utf8', 'hex');
         encryptedVerificationCode += cipher.final('hex');
 
-        const query = 'INSERT INTO TBL_MS_USUARIO (NOMBRE_USUARIO, EMAIL, CONTRASEÑA, CODIGO_VERIFICACION, ID_ROL, ID_ESTADO_USUARIO, CODIGO_2FA) VALUES (?, ?, ?, ?, ?, ?, ?)';
-        const [insertResults] = await connection.query(query, [NOMBRE_USUARIO, EMAIL, hashedPassword, encryptedVerificationCode, 2, 5, 1]);
-        const userId = insertResults.insertId; // Obtener el ID del usuario recién insertado
+        // Actualizar datos en TBL_MS_USUARIO
+        const updateQuery = 'UPDATE TBL_MS_USUARIO SET NOMBRE_USUARIO = ?, CONTRASEÑA = ?, CODIGO_VERIFICACION = ?, ID_ROL = ?, ID_ESTADO_USUARIO = ?, CODIGO_2FA = ? WHERE EMAIL = ?';
+        await connection.query(updateQuery, [NOMBRE_USUARIO, hashedPassword, encryptedVerificationCode, 2, 5, 1, EMAIL]);
+        console.log('Datos del usuario actualizados en TBL_MS_USUARIO.');
 
-        // Insertar NOMBRE_USUARIO en la tabla TBL_PERSONAS
-        const personaQuery = 'INSERT INTO TBL_PERSONAS (NOMBRE_PERSONA) VALUES (?)';
-        await connection.query(personaQuery, [NOMBRE_USUARIO]);
+        // Capturar el nombre de usuario asociado con el correo
+        const existingName = usuarioExistente.NOMBRE_USUARIO;
 
-        connection.release(); // Liberar la conexión
+        // Actualizar el NOMBRE_PERSONA en TBL_PERSONAS
+        const updatePersonaQuery = 'UPDATE TBL_PERSONAS SET NOMBRE_PERSONA = ? WHERE NOMBRE_PERSONA = ?';
+        await connection.query(updatePersonaQuery, [NOMBRE_USUARIO, existingName]);
+        console.log('Nombre de persona actualizado en TBL_PERSONAS.');
 
         // Configurar y enviar el correo electrónico
         const mailOptions = {
-            from: 'villalasacacias@villalasacacias.com',
-            to: EMAIL,
-            subject: 'Código de Verificación',
-            html: `
-              <p>Estimado/a,</p>
-              <p>Hemos recibido una solicitud para verificar tu cuenta en nuestro sistema. Para completar el proceso, por favor utiliza el siguiente código de verificación:</p>
-              <p style="font-size: 24px; font-weight: bold;">${verificationCode}</p>
-              <p>Este código es válido por un tiempo limitado, por lo que te recomendamos usarlo lo antes posible.</p>
-              <p>Si no solicitaste esta verificación, por favor ignora este mensaje.</p>
-              <p>Gracias por confiar en nosotros.</p>
-              <p>Atentamente,</p>
-              <p>El equipo de soporte de Vila Las Acacias</p>
-            `
+          from: 'villalasacacias@villalasacacias.com',
+          to: EMAIL,
+          subject: 'Código de Verificación',
+          html: `
+            <p>Estimado/a,</p>
+            <p>Hemos recibido una solicitud para verificar tu cuenta en nuestro sistema. Para completar el proceso, por favor utiliza el siguiente código de verificación:</p>
+            <p style="font-size: 24px; font-weight: bold;">${verificationCode}</p>
+            <p>Este código es válido por un tiempo limitado, por lo que te recomendamos usarlo lo antes posible.</p>
+            <p>Si no solicitaste esta verificación, por favor ignora este mensaje.</p>
+            <p>Gracias por confiar en nosotros.</p>
+            <p>Atentamente,</p>
+            <p>El equipo de soporte de Vila Las Acacias</p>
+          `
         };
 
-        transporter.sendMail(mailOptions, (err, info) => {
-            if (err) {
-                console.error('Error al enviar el correo:', err);
-                return res.status(500).json({ message: 'Error al enviar el correo de verificación' });
-            }
+        transporter.sendMail(mailOptions, (err) => {
+          if (err) {
+            console.error('Error al enviar el correo:', err);
+            return res.status(500).json({ message: 'Error al enviar el correo de verificación' });
+          }
 
-            // Generar el token
-            const token = jwt.sign({ id: userId }, SECRET_KEY, {
-                expiresIn: 1800 // 30 minutos
-            });
+          console.log('Correo de verificación enviado con éxito.');
+          // Generar el token
+          const token = jwt.sign({ id: usuarioExistente.ID_USUARIO }, SECRET_KEY, {
+            expiresIn: 1800 // 30 minutos
+          });
 
-            res.status(201).json({
-                token: token,
-                id_usuario: userId,
-                message: 'Usuario registrado exitosamente. Por favor verifica tu correo.'
-            });
+          // Enviar respuesta al cliente
+          res.status(201).json({
+            token: token,
+            id_usuario: usuarioExistente.ID_USUARIO,
+            message: 'Usuario registrado exitosamente. Por favor verifica tu correo.'
+          });
         });
 
-    } catch (err) {
-        console.error('Error al procesar el registro:', err);
-        res.status(500).json({ message: 'Error al procesar el registro' });
+        //connection.release();
+        return;
+      }
     }
+
+    // Si el correo no existe, proceder con el registro normal
+    console.log('Correo no registrado previamente. Procediendo con el registro.');
+    const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+    const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(secretKey, 'hex'), Buffer.alloc(16, 0));
+    let encryptedVerificationCode = cipher.update(verificationCode, 'utf8', 'hex');
+    encryptedVerificationCode += cipher.final('hex');
+
+    const query = 'INSERT INTO TBL_MS_USUARIO (NOMBRE_USUARIO, EMAIL, CONTRASEÑA, CODIGO_VERIFICACION, ID_ROL, ID_ESTADO_USUARIO, CODIGO_2FA) VALUES (?, ?, ?, ?, ?, ?, ?)';
+    const [insertResults] = await connection.query(query, [NOMBRE_USUARIO, EMAIL, hashedPassword, encryptedVerificationCode, 2, 5, 1]);
+    const userId = insertResults.insertId; // Obtener el ID del usuario recién insertado
+    console.log('Usuario registrado en TBL_MS_USUARIO con ID:', userId);
+
+    // Insertar NOMBRE_USUARIO en la tabla TBL_PERSONAS
+    const personaQuery = 'INSERT INTO TBL_PERSONAS (NOMBRE_PERSONA) VALUES (?)';
+    await connection.query(personaQuery, [NOMBRE_USUARIO]);
+    console.log('Nombre de usuario insertado en TBL_PERSONAS.');
+
+    connection.release();
+    console.log('Conexión liberada.');
+
+    // Configurar y enviar el correo electrónico
+    const mailOptions = {
+      from: 'villalasacacias@villalasacacias.com',
+      to: EMAIL,
+      subject: 'Código de Verificación',
+      html: `
+        <p>Estimado/a,</p>
+        <p>Hemos recibido una solicitud para verificar tu cuenta en nuestro sistema. Para completar el proceso, por favor utiliza el siguiente código de verificación:</p>
+        <p style="font-size: 24px; font-weight: bold;">${verificationCode}</p>
+        <p>Este código es válido por un tiempo limitado, por lo que te recomendamos usarlo lo antes posible.</p>
+        <p>Si no solicitaste esta verificación, por favor ignora este mensaje.</p>
+        <p>Gracias por confiar en nosotros.</p>
+        <p>Atentamente,</p>
+        <p>El equipo de soporte de Vila Las Acacias</p>
+      `
+    };
+
+    transporter.sendMail(mailOptions, (err) => {
+      if (err) {
+        console.error('Error al enviar el correo:', err);
+        return res.status(500).json({ message: 'Error al enviar el correo de verificación' });
+      }
+
+      console.log('Correo de verificación enviado con éxito.');
+      // Generar el token
+      const token = jwt.sign({ id: userId }, SECRET_KEY, {
+        expiresIn: 1800 // 30 minutos
+      });
+
+      // Enviar respuesta al cliente
+      res.status(201).json({
+        token: token,
+        id_usuario: userId,
+        message: 'Usuario registrado exitosamente. Por favor verifica tu correo.'
+      });
+    });
+  } catch (err) {
+    console.error('Error al procesar el registro:', err);
+    res.status(500).json({ message: 'Error al procesar el registro' });
+  }
 });
+
+
 
 
 
@@ -412,9 +508,10 @@ app.post('/verify', async (req, res) => {
       return res.status(400).json({ message: 'No hay un código de verificación disponible para este usuario' });
     }
 
-    const decipher = crypto.createDecipher('aes-128-cbc', secretKey);
+    // Configurar el descifrado usando los mismos parámetros que en el cifrado
+    const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(secretKey, 'hex'), Buffer.alloc(16, 0));
     let decryptedVerificationCode;
-    
+
     try {
       decryptedVerificationCode = decipher.update(user.CODIGO_VERIFICACION, 'hex', 'utf8');
       decryptedVerificationCode += decipher.final('utf8');
@@ -443,8 +540,8 @@ app.post('/verify', async (req, res) => {
     res.status(200).json({ message: 'Correo verificado exitosamente' });
   } catch (error) {
     console.error('Error al procesar la verificación:', error);
-    res.status(500).json({ message: 'Error al procesar la verificación' });
-  }
+    res.status(500).json({ message: 'Error al procesar la verificación' });
+  }
 });
 
 
@@ -1328,7 +1425,7 @@ app.post('/nueva_persona', async (req, res) => {
       }
 
       await connection.query(updatePersonaQuery, queryParams);
-
+    await connection.query('UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?', [usuarioId]);
       connection.release(); // Liberar la conexión
 
       console.log('ID_PERSONA actualizado:', ID_PERSONA);
