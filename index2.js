@@ -123,7 +123,7 @@ app.post('/login', async (req, res) => {
                     );
 
                     const mailOptions = {
-                      from: 'no-reply@yourdomain.com',
+                      from: 'villalasacacias@villalasacacias.com',
                       to: username,
                       subject: 'Código de Verificación 2FA',
                       html: `
@@ -342,7 +342,7 @@ app.post('/register', async (req, res) => {
 
         // Configurar y enviar el correo electrónico
         const mailOptions = {
-            from: 'no-reply@yourdomain.com',
+            from: 'villalasacacias@villalasacacias.com',
             to: EMAIL,
             subject: 'Código de Verificación',
             html: `
@@ -484,7 +484,7 @@ app.post('/restablecer_contrasena', async (req, res) => {
 
         // Configurar y enviar el correo electrónico
         const mailOptions = {
-            from: 'no-reply@yourdomain.com',
+            from: 'villalasacacias@villalasacacias.com',
             to: email,
             subject: 'Restablecimiento de Contraseña',
             html: `
