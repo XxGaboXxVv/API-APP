@@ -1328,12 +1328,20 @@ app.post('/nueva_persona', async (req, res) => {
 
           const emailList = adminEmails.map(row => row.EMAIL);
           const mailOptions = {
-              from: 'tuemail@dominio.com',
-              to: emailList,
-              subject: 'Nuevo Administrador de Condominio',
-              text: `Se ha registrado un nuevo administrador para el condominio:\n\nNombre: ${nombreUsuario}\nContacto: ${P_CONTACTO}\nCondominio: ${P_CONDOMINIO}`
-          };
-
+                      from: 'tuemail@dominio.com',
+                      to: emailList,
+                      subject: 'Registro de Nuevo Administrador de Condominio',
+                      html: `
+                        <p>Estimados Administradores,</p>
+                        <p>Nos complace informarles que se ha registrado un nuevo administrador para el siguiente condominio:</p>
+                        <p><strong>Nombre:</strong> ${nombreUsuario}</p>
+                        <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
+                        <p><strong>Condominio:</strong> ${P_CONDOMINIO}</p>
+                        <p>Les solicitamos brindar el apoyo necesario para que el nuevo administrador se integre de manera adecuada en sus funciones.</p>
+                        <p>Atentamente,</p>
+                        <p>El equipo de administración de Villa Las Acacias</p>
+                      `
+                    };
           transporter.sendMail(mailOptions, (err) => {
               if (err) {
                   console.error('Error al enviar el correo:', err);
