@@ -33,13 +33,14 @@ app.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
     try {
-        const connection = await mysqlPool.getConnection();
-        
+        const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+
+        // Consultar el usuario
         const [rows] = await connection.query(
             "SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?",
             [username]
         );
-        connection.release(); // Libera la conexión de la piscina
+        connection.release(); // Liberar la conexión
 
         if (rows.length === 0) {
             return res.status(404).send("Usuario no encontrado");
@@ -57,11 +58,11 @@ app.post('/login', async (req, res) => {
         const token = generateToken();  // Generar el token
 
         if (user.ID_ESTADO_USUARIO === 5) {
-            const connection = await mysqlPool.getConnection();
+            const connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
             const [adminRows] = await connection.query(
                 "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1"
             );
-            connection.release(); // Libera la conexión de la piscina
+            connection.release(); // Liberar la conexión
 
             const adminEmails = adminRows.map(admin => admin.EMAIL);
             return res.status(402).json({
@@ -77,7 +78,7 @@ app.post('/login', async (req, res) => {
             const passwordIsValid = bcrypt.compareSync(password, user.CONTRASEÑA);
 
             if (!passwordIsValid) {
-                const connection = await mysqlPool.getConnection();
+                const connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
                 await connection.query(
                     "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?",
                     [username]
@@ -86,16 +87,16 @@ app.post('/login', async (req, res) => {
                 const [paramRows] = await connection.query(
                     "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 1"
                 );
-                connection.release(); // Libera la conexión de la piscina
+                connection.release(); // Liberar la conexión
 
                 const maxLoginAttempts = parseInt(paramRows[0].VALOR, 10);
                 if (user.INTENTOS_FALLIDOS + 1 >= maxLoginAttempts + 1) {
-                    const connection = await mysqlPool.getConnection();
+                    const connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
                     await connection.query(
                         "UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 3 WHERE EMAIL = ?",
                         [username]
                     );
-                    connection.release(); // Libera la conexión de la piscina
+                    connection.release(); // Liberar la conexión
 
                     return res.status(403).send("Usuario ha sido bloqueado por múltiples intentos fallidos");
                 } else {
@@ -103,7 +104,7 @@ app.post('/login', async (req, res) => {
                 }
             } else {
                 // Actualizar los campos INTENTOS_FALLIDOS y PRIMER_INGRESO después de verificar la contraseña
-                const connection = await mysqlPool.getConnection();
+                const connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
                 await connection.query(
                     "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = 0, PRIMER_INGRESO = IF(PRIMER_INGRESO IS NULL, CONVERT_TZ(NOW(), @@session.time_zone, '-06:00'), PRIMER_INGRESO) WHERE EMAIL = ?",
                     [username]
@@ -141,7 +142,7 @@ app.post('/login', async (req, res) => {
                     res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/pantalla_principal' });
                 }
 
-                connection.release(); // Libera la conexión de la piscina
+                connection.release(); // Liberar la conexión
             }
         }
     } catch (err) {
@@ -149,6 +150,7 @@ app.post('/login', async (req, res) => {
         res.status(500).send("Error interno del servidor");
     }
 });
+
 
 
 function verifyToken(req, res, next) {
@@ -295,70 +297,80 @@ const transporter = nodemailer.createTransport({
 });
 
 app.post('/register', async (req, res) => {
-  const { NOMBRE_USUARIO, EMAIL, CONTRASEÑA } = req.body;
+    const { NOMBRE_USUARIO, EMAIL, CONTRASEÑA } = req.body;
 
-  if (!NOMBRE_USUARIO || !EMAIL || !CONTRASEÑA) {
-    return res.status(400).json({ message: 'Todos los campos son requeridos' });
-  }
-
-  try {
-    const hashedPassword = await bcrypt.hash(CONTRASEÑA, 8);
-
-    const connection = await mysqlPool.getConnection();
-    
-    const [results] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
-    
-    if (results.length > 0) {
-      connection.release();
-      return res.status(400).json({ message: 'Correo ya registrado' });
+    if (!NOMBRE_USUARIO || !EMAIL || !CONTRASEÑA) {
+        return res.status(400).json({ message: 'Todos los campos son requeridos' });
     }
 
-    const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase();
-    const cipher = crypto.createCipher('aes-128-cbc', secretKey);
-    let encryptedVerificationCode = cipher.update(verificationCode, 'utf8', 'hex');
-    encryptedVerificationCode += cipher.final('hex');
+    try {
+        const hashedPassword = await bcrypt.hash(CONTRASEÑA, 8);
+        const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
 
-    const query = 'INSERT INTO TBL_MS_USUARIO (NOMBRE_USUARIO, EMAIL, CONTRASEÑA, CODIGO_VERIFICACION, ID_ROL, ID_ESTADO_USUARIO, CODIGO_2FA) VALUES (?, ?, ?, ?, ?, ?, ?)';
-    const [insertResults] = await connection.query(query, [NOMBRE_USUARIO, EMAIL, hashedPassword, encryptedVerificationCode, 2, 5, 1]);
+        // Verificar si el correo ya está registrado
+        const [results] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
+        
+        if (results.length > 0) {
+            connection.release(); // Liberar la conexión
+            return res.status(400).json({ message: 'Correo ya registrado' });
+        }
 
-    const userId = insertResults.insertId; // Obtener el ID del usuario recién insertado
+        const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+        const cipher = crypto.createCipher('aes-128-cbc', secretKey);
+        let encryptedVerificationCode = cipher.update(verificationCode, 'utf8', 'hex');
+        encryptedVerificationCode += cipher.final('hex');
 
-    // Insertar NOMBRE_USUARIO en la tabla TBL_PERSONAS
-    const personaQuery = 'INSERT INTO TBL_PERSONAS (NOMBRE_PERSONA) VALUES (?)';
-    await connection.query(personaQuery, [NOMBRE_USUARIO]);
+        const query = 'INSERT INTO TBL_MS_USUARIO (NOMBRE_USUARIO, EMAIL, CONTRASEÑA, CODIGO_VERIFICACION, ID_ROL, ID_ESTADO_USUARIO, CODIGO_2FA) VALUES (?, ?, ?, ?, ?, ?, ?)';
+        const [insertResults] = await connection.query(query, [NOMBRE_USUARIO, EMAIL, hashedPassword, encryptedVerificationCode, 2, 5, 1]);
+        const userId = insertResults.insertId; // Obtener el ID del usuario recién insertado
 
-    connection.release();
+        // Insertar NOMBRE_USUARIO en la tabla TBL_PERSONAS
+        const personaQuery = 'INSERT INTO TBL_PERSONAS (NOMBRE_PERSONA) VALUES (?)';
+        await connection.query(personaQuery, [NOMBRE_USUARIO]);
 
-    // Enviar el correo de verificación
-    const mailOptions = {
-      from: 'no-reply@yourdomain.com',
-      to: EMAIL,
-      subject: 'Código de Verificación',
-      text: `Tu código de verificación es: ${verificationCode}`
-    };
+        connection.release(); // Liberar la conexión
 
-    transporter.sendMail(mailOptions, (err, info) => {
-      if (err) {
-        console.error('Error al enviar el correo:', err);
-        return res.status(500).json({ message: 'Error al enviar el correo de verificación' });
-      }
+        // Configurar y enviar el correo electrónico
+        const mailOptions = {
+            from: 'no-reply@yourdomain.com',
+            to: EMAIL,
+            subject: 'Código de Verificación',
+            html: `
+              <p>Estimado/a,</p>
+              <p>Hemos recibido una solicitud para verificar tu cuenta en nuestro sistema. Para completar el proceso, por favor utiliza el siguiente código de verificación:</p>
+              <p style="font-size: 24px; font-weight: bold;">${verificationCode}</p>
+              <p>Este código es válido por un tiempo limitado, por lo que te recomendamos usarlo lo antes posible.</p>
+              <p>Si no solicitaste esta verificación, por favor ignora este mensaje.</p>
+              <p>Gracias por confiar en nosotros.</p>
+              <p>Atentamente,</p>
+              <p>El equipo de soporte de Vila Las Acacias</p>
+            `
+        };
 
-      // Generar el token
-      const token = jwt.sign({ id: userId }, SECRET_KEY, {
-        expiresIn: 1800 // 30 minutos
-      });
+        transporter.sendMail(mailOptions, (err, info) => {
+            if (err) {
+                console.error('Error al enviar el correo:', err);
+                return res.status(500).json({ message: 'Error al enviar el correo de verificación' });
+            }
 
-      res.status(201).json({
-        token: token,
-        id_usuario: userId,
-        message: 'Usuario registrado exitosamente. Por favor verifica tu correo.'
-      });
-    });
-  } catch (err) {
-    console.error('Error al procesar el registro:', err);
-    res.status(500).json({ message: 'Error al procesar el registro' });
-  }
+            // Generar el token
+            const token = jwt.sign({ id: userId }, SECRET_KEY, {
+                expiresIn: 1800 // 30 minutos
+            });
+
+            res.status(201).json({
+                token: token,
+                id_usuario: userId,
+                message: 'Usuario registrado exitosamente. Por favor verifica tu correo.'
+            });
+        });
+
+    } catch (err) {
+        console.error('Error al procesar el registro:', err);
+        res.status(500).json({ message: 'Error al procesar el registro' });
+    }
 });
+
 
 
 
@@ -429,52 +441,67 @@ app.post('/verify', async (req, res) => {
 
 //*********** RESTABLECER CONTRASENA    *********** 
 app.post('/restablecer_contrasena', async (req, res) => {
-  const { email } = req.body;
+    const { email } = req.body;
 
-  if (!email) {
-    return res.status(400).json({ message: 'El correo electrónico es requerido' });
-  }
-
-  try {
-    const connection = await mysqlPool.getConnection();
-    
-    // Verificar si el usuario existe
-    const [userResults] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [email]);
-    
-    if (userResults.length === 0) {
-      connection.release();
-      return res.status(404).json({ message: 'Usuario no encontrado' });
+    if (!email) {
+        return res.status(400).json({ message: 'El campo de correo electrónico es requerido' });
     }
 
-    const tempPassword = crypto.randomBytes(4).toString('hex');
-    const hashedTempPassword = await bcrypt.hash(tempPassword, 10);
+    try {
+        const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
 
-    // Eliminar cualquier entrada existente para el usuario en TBL_REINICIO_CONTRASEÑA
-    await connection.query('DELETE FROM TBL_REINICIO_CONTRASEÑA WHERE EMAIL = ?', [email]);
+        // Verificar si el usuario existe
+        const [userResults] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [email]);
 
-    // Insertar la nueva entrada en TBL_REINICIO_CONTRASEÑA
-    await connection.query('INSERT INTO TBL_REINICIO_CONTRASEÑA (TOKEN, EMAIL) VALUES (?, ?)', [hashedTempPassword, email]);
+        if (userResults.length === 0) {
+            connection.release(); // Liberar la conexión
+            return res.status(404).json({ message: 'Usuario no encontrado' });
+        }
 
-    connection.release();
+        const tempPassword = crypto.randomBytes(4).toString('hex');
+        const hashedTempPassword = await bcrypt.hash(tempPassword, 10);
 
-    const mailOptions = {
-      from: 'no-reply@yourdomain.com',
-      to: email,
-      subject: 'Restablecer contraseña',
-      text: `Esta es tu contraseña de verificación para poder restablecer la contraseña: ${tempPassword}`
-    };
+        // Eliminar cualquier entrada existente para el usuario en TBL_REINICIO_CONTRASEÑA
+        await connection.query('DELETE FROM TBL_REINICIO_CONTRASEÑA WHERE EMAIL = ?', [email]);
 
-    transporter.sendMail(mailOptions, (error) => {
-      if (error) {
-        return res.status(500).json({ message: 'Error al enviar el correo' });
-      }
-      return res.status(200).json({ message: 'Correo enviado con éxito' });
-    });
-  } catch (error) {
-    console.error('Error al procesar la solicitud de restablecimiento de contraseña:', error);
-    res.status(500).json({ message: 'Error al procesar la solicitud de restablecimiento de contraseña' });
-  }
+        // Insertar la nueva entrada en TBL_REINICIO_CONTRASEÑA
+        await connection.query(
+            'INSERT INTO TBL_REINICIO_CONTRASEÑA (TOKEN, EMAIL) VALUES (?, ?)',
+            [hashedTempPassword, email]
+        );
+
+        connection.release(); // Liberar la conexión
+
+        // Configurar y enviar el correo electrónico
+        const mailOptions = {
+            from: 'no-reply@yourdomain.com',
+            to: email,
+            subject: 'Restablecimiento de Contraseña',
+            html: `
+                <p>Estimado/a usuario/a,</p>
+                <p>Hemos recibido una solicitud para restablecer la contraseña de tu cuenta. Para proceder, por favor utiliza la siguiente contraseña temporal:</p>
+                <p style="font-size: 24px; font-weight: bold;">${tempPassword}</p>
+                <p>Te recomendamos que inicies sesión con esta contraseña temporal y la cambies de inmediato para proteger tu cuenta.</p>
+                <p>Si no solicitaste este restablecimiento, te recomendamos que ignores este correo y te pongas en contacto con nuestro equipo de administración de Villa Las Acacias inmediatamente.</p>
+                <p>Gracias por tu atención.</p>
+                <p>Atentamente,</p>
+                <p>El equipo de administración de Villa Las Acacias</p>
+            `
+        };
+
+        transporter.sendMail(mailOptions, (error, info) => {
+            if (error) {
+                return res.status(500).json({ message: 'Error al enviar el correo' });
+            }
+            return res.status(200).json({ message: 'Correo enviado con éxito' });
+        });
+
+    } catch (err) {
+        console.error('Error al procesar el restablecimiento de contraseña:', err);
+        res.status(500).json({ message: 'Error al procesar la solicitud' });
+    }
 });
+
 
   
   
@@ -1203,106 +1230,126 @@ app.get('/parentesco', async (req, res) => {
 
 //********* NUEVA PERSONA*********
 app.post('/nueva_persona', async (req, res) => {
-  const { usuarioId, P_DNI, P_TIPO_CONTACTO, P_CONTACTO, P_PARENTESCO, P_CONDOMINIO } = req.body;
+    const { usuarioId, P_DNI, P_TIPO_CONTACTO, P_CONTACTO, P_PARENTESCO, P_CONDOMINIO } = req.body;
 
-  console.log('Datos recibidos:', req.body);
-
-  let connection;
-
-  try {
-    // Obtener una conexión del pool
-    connection = await mysqlPool.getConnection();
-
-    // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
-    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
-
-    if (!usuarioResults.length) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (!usuarioId || !P_DNI || !P_TIPO_CONTACTO || !P_CONTACTO || !P_PARENTESCO || !P_CONDOMINIO) {
+        return res.status(400).json({ error: 'Todos los campos son requeridos' });
     }
 
-    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+    try {
+        const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
 
-    // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+        // Obtener el nombre de usuario
+        const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
-    if (!personaResults.length) {
-      return res.status(404).json({ error: 'Persona no encontrada' });
+        if (usuarioResults.length === 0) {
+            connection.release(); // Liberar la conexión
+            return res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+
+        const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+        // Obtener el ID_PERSONA usando el nombreUsuario
+        const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+
+        if (personaResults.length === 0) {
+            connection.release(); // Liberar la conexión
+            return res.status(404).json({ error: 'Persona no encontrada' });
+        }
+
+        const ID_PERSONA = personaResults[0].ID_PERSONA;
+
+        // Verificar si el condominio existe
+        const [condominioResults] = await connection.query('SELECT ID_CONDOMINIO FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO]);
+
+        if (condominioResults.length === 0) {
+            connection.release(); // Liberar la conexión
+            return res.status(404).json({ error: 'Condominio no encontrado' });
+        }
+
+        const ID_CONDOMINIO = condominioResults[0].ID_CONDOMINIO;
+
+        // Verificar si hay un administrador para este condominio
+        const [adminResults] = await connection.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO]);
+
+        const adminCount = adminResults[0].adminCount;
+        const isAdminRequired = adminCount === 0; // Si no hay administrador, se debe insertar 1 en ID_PADRE
+
+        // Consultar los IDs necesarios
+        const [tipoContactoResults, parentescoResults] = await connection.query(`
+            SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?;
+            SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?;
+        `, [P_TIPO_CONTACTO, P_PARENTESCO]);
+
+        if (!tipoContactoResults.length || !parentescoResults.length) {
+            connection.release(); // Liberar la conexión
+            return res.status(405).json({ error: 'Datos no encontrados' });
+        }
+
+        const ID_TIPO_CONTACTO = tipoContactoResults[0].ID_TIPO_CONTACTO;
+        const ID_PARENTESCO = parentescoResults[0].ID_PARENTESCO;
+
+        // Insertar contacto
+        const [contactoResults] = await connection.query('INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)', [ID_TIPO_CONTACTO, P_CONTACTO]);
+
+        const ID_CONTACTO = contactoResults.insertId;
+
+        // Construir consulta de actualización de persona
+        let updatePersonaQuery;
+        const queryParams = [P_DNI, ID_CONTACTO, 1, ID_PARENTESCO, ID_CONDOMINIO, ID_PERSONA];
+
+        if (isAdminRequired) {
+            updatePersonaQuery = `
+                UPDATE TBL_PERSONAS 
+                SET DNI_PERSONA = ?, ID_CONTACTO = ?, 
+                ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?, 
+                ID_CONDOMINIO = ?, ID_PADRE = 1
+                WHERE ID_PERSONA = ?
+            `;
+        } else {
+            updatePersonaQuery = `
+                UPDATE TBL_PERSONAS 
+                SET DNI_PERSONA = ?, ID_CONTACTO = ?, 
+                ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?, 
+                ID_CONDOMINIO = ?, ID_PADRE = NULL
+                WHERE ID_PERSONA = ?
+            `;
+        }
+
+        await connection.query(updatePersonaQuery, queryParams);
+
+        connection.release(); // Liberar la conexión
+
+        console.log('ID_PERSONA actualizado:', ID_PERSONA);
+
+        // Enviar correo si es el primer administrador
+        if (isAdminRequired) {
+            const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1');
+
+            const emailList = adminEmails.map(row => row.EMAIL);
+            const mailOptions = {
+                from: 'tuemail@dominio.com',
+                to: emailList,
+                subject: 'Nuevo Administrador de Condominio',
+                text: `Se ha registrado un nuevo administrador para el condominio:\n\nNombre: ${nombreUsuario}\nContacto: ${P_CONTACTO}\nCondominio: ${P_CONDOMINIO}`
+            };
+
+            transporter.sendMail(mailOptions, (err) => {
+                if (err) {
+                    console.error('Error al enviar el correo:', err);
+                    return res.status(500).json({ error: 'Error al enviar el correo' });
+                }
+                console.log('Correo enviado a:', emailList);
+            });
+        }
+
+        res.status(201).json({ success: true, message: 'Persona actualizada correctamente' });
+    } catch (err) {
+        console.error('Error al procesar la solicitud:', err);
+        res.status(500).json({ error: 'Error al procesar la solicitud' });
     }
-
-    const ID_PERSONA = personaResults[0].ID_PERSONA;
-
-    // Verificación si el condominio existe
-    const [condominioResults] = await connection.query('SELECT ID_CONDOMINIO FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO]);
-
-    if (!condominioResults.length) {
-      return res.status(404).json({ error: 'Condominio no encontrado' });
-    }
-
-    const ID_CONDOMINIO = condominioResults[0].ID_CONDOMINIO;
-
-    // Verificar si hay un administrador (ID_PADRE = 1) para este condominio
-    const [adminResults] = await connection.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO]);
-
-    const adminCount = adminResults[0].adminCount;
-    const isAdminRequired = adminCount === 0; // Si no hay administrador, se debe insertar 1 en ID_PADRE
-
-    // Consultar el ID_TIPO_CONTACTO
-    const [tipoContactoResults] = await connection.query('SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?', [P_TIPO_CONTACTO]);
-
-    if (!tipoContactoResults.length) {
-      return res.status(405).json({ error: 'Tipo de contacto no encontrado' });
-    }
-
-    const ID_TIPO_CONTACTO = tipoContactoResults[0].ID_TIPO_CONTACTO;
-
-    // Consultar el ID_PARENTESCO
-    const [parentescoResults] = await connection.query('SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?', [P_PARENTESCO]);
-
-    if (!parentescoResults.length) {
-      return res.status(405).json({ error: 'Parentesco no encontrado' });
-    }
-
-    const ID_PARENTESCO = parentescoResults[0].ID_PARENTESCO;
-
-    // Insertar contacto
-    const [contactoResults] = await connection.query('INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)', [ID_TIPO_CONTACTO, P_CONTACTO]);
-    const ID_CONTACTO = contactoResults.insertId;
-
-    // Construir consulta de actualización de persona
-    const updatePersonaQuery = isAdminRequired
-      ? 'UPDATE TBL_PERSONAS SET DNI_PERSONA = ?, ID_CONTACTO = ?, ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?, ID_CONDOMINIO = ?, ID_PADRE = 1 WHERE ID_PERSONA = ?'
-      : 'UPDATE TBL_PERSONAS SET DNI_PERSONA = ?, ID_CONTACTO = ?, ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?, ID_CONDOMINIO = ?, ID_PADRE = NULL WHERE ID_PERSONA = ?';
-
-    const queryParams = [P_DNI, ID_CONTACTO, 1, ID_PARENTESCO, ID_CONDOMINIO, ID_PERSONA];
-    
-    await connection.query(updatePersonaQuery, queryParams);
-
-    // Enviar correo si es el primer administrador
-    if (isAdminRequired) {
-      const [adminEmails] = await connection.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1');
-      const emailList = adminEmails.map(row => row.EMAIL);
-      
-      const mailOptions = {
-        from: 'tuemail@dominio.com',
-        to: emailList,
-        subject: 'Nuevo Administrador de Condominio',
-        text: `Se ha registrado un nuevo administrador para el condominio:\n\nNombre: ${nombreUsuario}\nContacto: ${P_CONTACTO}\nCondominio: ${P_CONDOMINIO}`
-      };
-
-      await transporter.sendMail(mailOptions);
-      console.log('Correo enviado a:', emailList);
-    }
-
-    res.status(201).json({ success: true, message: 'Persona actualizada correctamente' });
-
-  } catch (err) {
-    console.error('Error en la operación:', err);
-    res.status(500).json({ error: 'Error en la operación' });
-
-  } finally {
-    if (connection) connection.release(); // Liberar la conexión de vuelta al pool
-  }
 });
+
 
 
 
@@ -1334,3 +1381,122 @@ app.put('/desactivarPersona', async (req, res) => {
     res.status(500).json({ error: 'Error al actualizar PRIMER_INGRESO_COMPLETADO' });
   }
 });
+
+app.get('/solicitudes', async (req, res) => {
+    const usuarioId = req.query.usuario_id;
+
+    if (!usuarioId) {
+        return res.status(400).json({ error: 'Se requiere usuario_id' });
+    }
+
+    try {
+        const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+
+        // Obtener el nombre de usuario
+        const [usuarioResults] = await connection.query(
+            'SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?',
+            [usuarioId]
+        );
+
+        if (usuarioResults.length === 0) {
+            connection.release(); // Liberar la conexión
+            return res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+
+        const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+        // Obtener el ID_PERSONA usando el nombreUsuario
+        const [personaResults] = await connection.query(
+            'SELECT ID_PERSONA, ID_PADRE, ID_CONDOMINIO FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?',
+            [nombreUsuario]
+        );
+
+        if (personaResults.length === 0) {
+            connection.release(); // Liberar la conexión
+            return res.status(404).json({ error: 'Persona no encontrada' });
+        }
+
+        const { ID_PERSONA, ID_PADRE, ID_CONDOMINIO } = personaResults[0];
+
+        // Verificar si el usuario es administrador (ID_PADRE debe ser 1)
+        if (ID_PADRE !== 1) {
+            connection.release(); // Liberar la conexión
+            return res.status(403).json({ error: 'No tienes los permisos para poder ingresar' });
+        }
+
+        // Obtener todos los nombres en ese ID_CONDOMINIO que tengan el estado pendiente (ID_ESTADO_USUARIO = 5)
+        const [residentesResults] = await connection.query(
+            `SELECT 
+              p.NOMBRE_PERSONA, 
+              p.DNI_PERSONA, 
+              c.DESCRIPCION AS CONTACTO,
+              par.DESCRIPCION AS PARENTESCO,
+              con.DESCRIPCION AS CONDOMINIO,
+              u.ID_USUARIO
+             FROM TBL_PERSONAS p
+             JOIN TBL_MS_USUARIO u ON p.NOMBRE_PERSONA COLLATE utf8mb4_unicode_ci = u.NOMBRE_USUARIO COLLATE utf8mb4_unicode_ci
+             LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
+             LEFT JOIN TBL_PARENTESCOS par ON p.ID_PARENTESCO = par.ID_PARENTESCO
+             LEFT JOIN TBL_CONDOMINIOS con ON p.ID_CONDOMINIO = con.ID_CONDOMINIO
+             WHERE p.ID_CONDOMINIO = ? AND u.ID_ESTADO_USUARIO = 5`,
+            [ID_CONDOMINIO]
+        );
+
+        connection.release(); // Liberar la conexión
+
+        if (residentesResults.length === 0) {
+            return res.status(404).json({ error: 'No hay residentes pendientes de aprobación' });
+        }
+
+        res.status(200).json({ residentesPendientes: residentesResults });
+    } catch (err) {
+        console.error('Error al obtener las solicitudes de residentes:', err);
+        res.status(500).json({ error: 'Error al obtener las solicitudes de residentes' });
+    }
+});
+
+app.post('/aceptar', async (req, res) => {
+    const { idUsuario } = req.body;
+
+    if (!idUsuario) {
+        return res.status(400).json({ error: 'Se requiere idUsuario' });
+    }
+
+    console.log('Datos recibidos en /aceptar:', req.body);
+
+    try {
+        const [result] = await mysqlPool.query(
+            'UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 1 WHERE ID_USUARIO = ?',
+            [idUsuario]
+        );
+
+        res.status(200).send('Solicitud aceptada');
+    } catch (err) {
+        console.error('Error al aceptar la solicitud:', err);
+        res.status(500).send('Error al aceptar la solicitud');
+    }
+});
+
+app.post('/rechazar', async (req, res) => {
+    const { idUsuario } = req.body;
+
+    if (!idUsuario) {
+        return res.status(400).json({ error: 'Se requiere idUsuario' });
+    }
+
+    console.log('Datos recibidos en /rechazar:', req.body);
+
+    try {
+        const [result] = await mysqlPool.query(
+            'UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 2 WHERE ID_USUARIO = ?',
+            [idUsuario]
+        );
+
+        res.status(200).send('Solicitud rechazada');
+    } catch (err) {
+        console.error('Error al rechazar la solicitud:', err);
+        res.status(500).send('Error al rechazar la solicitud');
+    }
+});
+
+
