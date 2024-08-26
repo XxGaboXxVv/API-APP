@@ -298,11 +298,11 @@ const secretKey = 'clave_secreta';
 
 // SERVIDOR DE CORREO MAILTRAP
 const transporter = nodemailer.createTransport({
-    host: "sandbox.smtp.mailtrap.io",
-    port: 2525,
+    host: "smtp.hostinger.com",
+    port: 465,
     auth: {
-      user: "a576baf13dcf6f",
-      pass: "0243f06cea3940"
+      user: "villalasacacias@villalasacacias.com",
+      pass: "Dragonb@ll2"
     }
 });
 
