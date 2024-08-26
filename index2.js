@@ -123,11 +123,21 @@ app.post('/login', async (req, res) => {
                     );
 
                     const mailOptions = {
-                        from: 'no-reply@yourdomain.com',
-                        to: username,
-                        subject: 'Código de Verificación 2FA',
-                        text: `Tu código de verificación es: ${verificationCode}`
-                    };
+                      from: 'no-reply@yourdomain.com',
+                      to: username,
+                      subject: 'Código de Verificación 2FA',
+                      html: `
+                        <p>Estimado/a usuario/a,</p>
+                        <p>Como parte de nuestro proceso de autenticación en dos pasos (2FA), te hemos enviado un código de verificación único para asegurar que solo tú puedas acceder a tu cuenta.</p>
+                        <p>Tu código de verificación es:</p>
+                        <p style="font-size: 24px; font-weight: bold;">${verificationCode}</p>
+                        <p>Por favor, ingresa este código en la pantalla de verificación para completar el proceso de autenticación.</p>
+                        <p>Si no solicitaste este código, te recomendamos que cambies tu contraseña y te pongas en contacto con nuestro equipo de administracion de Villa Las Acacias.</p>
+                        <p>Gracias por tu cooperación.</p>
+                        <p>Atentamente,</p>
+                        <p>El equipo de administración de Villa Las Acacias</p>
+                      `
+                    };
 
                     transporter.sendMail(mailOptions, (error, info) => {
                         if (error) {
