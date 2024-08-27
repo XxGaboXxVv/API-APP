@@ -120,10 +120,7 @@ app.post('/login', async (req, res) => {
                     [username]
                 );
 
-                if (user.ID_ESTADO_USUARIO === 1 && user.PRIMER_INGRESO_COMPLETADO === 0) {
-                    // Redirigir al usuario a la página de completar información
-                    res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/completar_persona' });
-                } else if (user.CODIGO_2FA === 1) {
+                 if (user.CODIGO_2FA === 1) {
                     // Generar y enviar código de verificación
                     const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase(); // Código de 6 dígitos en mayúsculas
 
