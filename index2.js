@@ -783,7 +783,7 @@ app.post('/registrar_visitas', async (req, res) => {
     const ID_PERSONA = personaResults[0].ID_PERSONA;
 
     // Obtener el valor del parámetro con ID_PARAMETRO = 3
-    const [parametroResults] = await connection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 3');
+    const [parametroResults] = await connection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = "QR_VENCIMIENTO"');
 
     if (parametroResults.length === 0) {
       connection.release();
@@ -793,13 +793,13 @@ app.post('/registrar_visitas', async (req, res) => {
     const horas = parametroResults[0].VALOR;
     const fechaActual = moment().tz('America/Tegucigalpa');
     const fechaCalculada = fechaActual.add(horas, 'hours').format('YYYY-MM-DD HH:mm:ss');
-    const nuevaFechaActual = moment().tz('America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss'); // Create a new formatted date
 
     let insertQuery, insertParams;
 
     if (isRecurrentVisitor) {
+      const fechaActual = moment().tz('America/Tegucigalpa');
       insertQuery = 'INSERT INTO TBL_VISITANTES_RECURRENTES (ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?, ?)';
-      insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, nuevaFechaActual, FECHA_VENCIMIENTO];
+      insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaActual.format('YYYY-MM-DD HH:mm:ss'), FECHA_VENCIMIENTO];
     } else {
       insertQuery = 'INSERT INTO TBL_REGVISITAS (ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?, ?)';
       insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada];
@@ -813,11 +813,13 @@ app.post('/registrar_visitas', async (req, res) => {
     let insertBitacoraQuery, insertBitacoraParams;
 
     if (isRecurrentVisitor) {
-      insertBitacoraQuery = 'INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTE, NUM_PERSONA, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?)';
+      const fechaActual = moment().tz('America/Tegucigalpa');
+      insertBitacoraQuery = 'INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTES_RECURRENTES, NUM_PERSONA, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?)';
       insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaActual.format('YYYY-MM-DD HH:mm:ss'), FECHA_VENCIMIENTO];
     } else {
-      insertBitacoraQuery = 'INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTE, NUM_PERSONA, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?)';
-      insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada];
+      const fechaActual = moment().tz('America/Tegucigalpa');
+      insertBitacoraQuery = 'INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTE, NUM_PERSONA, NUM_PLACA, FECHA_HORA,FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?)';
+      insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA,fechaActual.format('YYYY-MM-DD HH:mm:ss'), fechaCalculada];
     }
 
     await connection.query(insertBitacoraQuery, insertBitacoraParams);
@@ -882,10 +884,9 @@ app.post('/registrar_visitas', async (req, res) => {
     });
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).json({ message: 'Error en el servidor' });
-  }
+    res.status(500).json({ message: 'Error en el servidor' });
+  }
 });
-
 
 
 
@@ -1061,7 +1062,93 @@ app.get('/consultar_reservaciones', async (req, res) => {
   }
 });
 
+// Ruta para consultar reservaciones futuras
+app.get('/consulta_reservaciones_futuras', async (req, res) => {
+  let connection;
+  try {
+    // Obtener una conexión del pool
+    connection = await mysqlPool.getConnection();
 
+    // Consulta SQL
+    const query = `
+      SELECT 
+          r.ID_RESERVA, 
+          r.ID_PERSONA, 
+          i.NOMBRE_INSTALACION, 
+          e.DESCRIPCION AS ESTADO_RESERVA, 
+          r.TIPO_EVENTO, 
+          r.HORA_FECHA
+      FROM 
+          TBL_RESERVAS r
+      JOIN 
+          TBL_INSTALACIONES i ON r.ID_INSTALACION = i.ID_INSTALACION
+      JOIN 
+          TBL_ESTADO_RESERVA e ON r.ID_ESTADO_RESERVA = e.ID_ESTADO_RESERVA
+      WHERE 
+          r.HORA_FECHA >= CURDATE()
+      ORDER BY 
+          r.HORA_FECHA ASC;
+    `;
+
+    // Ejecutar la consulta
+    const [results] = await connection.query(query);
+
+    // Retornar los resultados a la aplicación Flutter
+    res.json(results);
+  } catch (err) {
+    console.error('Error al ejecutar la consulta:', err);
+    res.status(500).send('Error en el servidor');
+  } finally {
+    if (connection) {
+      // Liberar la conexión de vuelta al pool
+      connection.release();
+    }
+  }
+});
+
+// Ruta para obtener los horarios de las reservaciones
+app.get('/obtener_horarios', async (req, res) => {
+  let connection;
+  try {
+    // Obtener una conexión del pool
+    connection = await mysqlPool.getConnection();
+
+    // Consulta SQL
+    const query = `
+      SELECT 
+          ID_PARAMETRO, PARAMETRO, VALOR
+      FROM 
+          TBL_MS_PARAMETROS
+      WHERE 
+          ID_PARAMETRO IN (9, 10, 11, 12, 13, 14)
+    `;
+
+    // Ejecutar la consulta
+    const [results] = await connection.query(query);
+
+    // Formatear los resultados en una lista
+    const horarios = [
+      { "jornada": "Lunes a viernes matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 9)?.VALOR || 'No disponible' },
+      { "jornada": "Lunes a viernes vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 10)?.VALOR || 'No disponible' },
+      { "jornada": "Sabado matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 11)?.VALOR || 'No disponible' },
+      { "jornada": "Sabado vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 12)?.VALOR || 'No disponible' },
+      { "jornada": "Domingo matutino ", "Horarios": results.find(row => row.ID_PARAMETRO === 13)?.VALOR || 'No disponible' },
+      { "jornada": "Domingo vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 14)?.VALOR || 'No disponible' },
+    ];
+
+    // Retornar los horarios formateados
+    res.json(horarios);
+
+  } catch (err) {
+    console.error('Error al ejecutar la consulta:', err);
+    res.status(500).send('Error en el servidor');
+  } finally {
+    if (connection) {
+      // Liberar la conexión de vuelta al pool
+      connection.release();
+    }
+  }
+});
 
 //********** Consultar Visitas *********
 app.get('/consultar_visitas', async (req, res) => {
@@ -1185,8 +1272,6 @@ app.get('/consultar_familia', async (req, res) => {
 app.post('/nueva_reserva', async (req, res) => {
   const { usuarioId, nombreInstalacion, tipoEvento, horaFecha } = req.body;
 
-  console.log('Datos recibidos:', req.body);
-
   try {
     const connection = await mysqlPool.getConnection();
 
@@ -1200,15 +1285,35 @@ app.post('/nueva_reserva', async (req, res) => {
 
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
-    // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+    // Obtener datos de la persona
+    const [personaResults] = await connection.query('SELECT ID_PERSONA, NOMBRE_PERSONA, DNI_PERSONA, ID_CONTACTO, ID_CONDOMINIO FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
       connection.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
-    const ID_PERSONA = personaResults[0].ID_PERSONA;
+    const { ID_PERSONA, NOMBRE_PERSONA, DNI_PERSONA, ID_CONTACTO, ID_CONDOMINIO } = personaResults[0];
+
+    // Obtener la DESCRIPCION del contacto
+    const [contactoResults] = await connection.query('SELECT DESCRIPCION FROM TBL_CONTACTOS WHERE ID_CONTACTO = ?', [ID_CONTACTO]);
+
+    if (!contactoResults.length) {
+      connection.release();
+      return res.status(404).json({ error: 'Contacto no encontrado' });
+    }
+
+    const P_CONTACTO = contactoResults[0].DESCRIPCION;
+
+    // Obtener la DESCRIPCION del condominio
+    const [condominioResults] = await connection.query('SELECT DESCRIPCION FROM TBL_CONDOMINIOS WHERE ID_CONDOMINIO = ?', [ID_CONDOMINIO]);
+
+    if (!condominioResults.length) {
+      connection.release();
+      return res.status(404).json({ error: 'Condominio no encontrado' });
+    }
+
+    const P_CONDOMINIO = condominioResults[0].DESCRIPCION;
 
     // Buscar ID_INSTALACION por nombre
     const [instalacionResults] = await connection.query('SELECT ID_INSTALACION FROM TBL_INSTALACIONES WHERE NOMBRE_INSTALACION = ?', [nombreInstalacion]);
@@ -1220,8 +1325,48 @@ app.post('/nueva_reserva', async (req, res) => {
 
     const ID_INSTALACION = instalacionResults[0].ID_INSTALACION;
 
-    // Verificar si ya existe una reserva para esa fecha y hora en la misma instalación
-    const [reservaResults] = await connection.query('SELECT * FROM TBL_RESERVAS WHERE ID_INSTALACION = ? AND HORA_FECHA = ?', [ID_INSTALACION, horaFecha]);
+    // Determinar el día de la semana
+    const diaSemana = new Date(horaFecha).getDay();
+    let jornada = '';
+
+    // Determinar si la reserva es por la mañana o la tarde
+    const horaReserva = new Date(horaFecha).getHours();
+
+    if (horaReserva < 13) {
+      jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_MANAÑA' : 
+                diaSemana === 6 ? 'HORARIO_SABADO_MANAÑA' : 
+                'HORARIO_DOMINGO_MANAÑA';
+    } else {
+      jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_TARDE' : 
+                diaSemana === 6 ? 'HORARIO_SABADO_TARDE' : 
+                'HORARIO_DOMINGO_TARDE';
+    }
+
+    // Obtener los horarios permitidos para la jornada seleccionada
+    const [parametrosResults] = await connection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = ?', [jornada]);
+
+    if (!parametrosResults.length) {
+      connection.release();
+      return res.status(500).json({ error: 'No se pudo obtener el horario permitido' });
+    }
+
+    const [horaInicio, horaFin] = parametrosResults[0].VALOR.split('-').map(h => h.trim());
+
+    // Verificar si la hora solicitada está dentro del horario permitido
+    const hora = horaFecha.split(' ')[1];
+    if (hora < horaInicio || hora > horaFin) {
+      connection.release();
+      return res.status(400).json({ error: 'El horario ingresado no está permitido según los parámetros configurados' });
+    }
+
+    // Verificar si ya existe una reserva en el mismo día y en la misma jornada para la misma instalación
+    const [reservaResults] = await connection.query(
+      `SELECT * FROM TBL_RESERVAS 
+       WHERE ID_INSTALACION = ? 
+       AND DATE(HORA_FECHA) = DATE(?) 
+       AND TIME(HORA_FECHA) BETWEEN TIME(?) AND TIME(?)`,
+      [ID_INSTALACION, horaFecha, horaInicio, horaFin]
+    );
 
     if (reservaResults.length > 0) {
       connection.release();
@@ -1234,15 +1379,45 @@ app.post('/nueva_reserva', async (req, res) => {
       [ID_PERSONA, ID_INSTALACION, tipoEvento, horaFecha]
     );
 
+    // Obtener los correos de los administradores
+    const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1');
+
+    const emailList = adminEmails.map(row => row.EMAIL);
+    const mailOptions = {
+      from: 'villalasacacias@villalasacacias.com',
+      to: emailList,
+      subject: 'Nueva reservación',
+      html: `
+        <p>Estimados Administradores,</p>
+        <p>Nos complace informarles que se ha solicitado una nueva reservación:</p>
+        <p><strong>Nombre:</strong> ${NOMBRE_PERSONA}</p>
+        <p><strong>DNI:</strong> ${DNI_PERSONA}</p>
+        <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
+        <p><strong>Condominio:</strong> ${P_CONDOMINIO}</p>
+        <p><strong>Instalación:</strong> ${nombreInstalacion}</p>
+        <p><strong>Tipo de Evento:</strong> ${tipoEvento}</p>
+        <p><strong>Fecha y Hora:</strong> ${horaFecha}</p>
+        <p>Les solicitamos brindar el apoyo necesario para que la nueva reservación se ejecute de manera adecuada.</p>
+        <p>Atentamente,</p>
+        <p>El equipo de administración de Villa Las Acacias</p>
+      `
+    };
+
+    transporter.sendMail(mailOptions, (err) => {
+      if (err) {
+        console.error('Error al enviar el correo:', err);
+        return res.status(500).json({ error: 'Error al enviar el correo' });
+      }
+      console.log('Correo enviado a:', emailList);
+    });
+
     connection.release();
     res.status(201).json({ message: 'Reserva creada exitosamente', reservaId: insertResult.insertId });
   } catch (error) {
     console.error('Error al crear la reserva:', error);
-    res.status(500).json({ error: 'Error al crear la reserva' });
-  }
+    res.status(500).json({ error: 'Error al crear la reserva' });
+  }
 });
-
-
 
 // ******* Tipos de Instalaciones *******
 app.get('/instalaciones', async (req, res) => {
