@@ -14,11 +14,11 @@ const app = express();
 app.use(bp.json());
 
 const mysqlPool = mysql.createPool({
-     host:'srv1059.hstgr.io',
-    user:'u729991132_root',
-    password:'Dragonb@ll2',
-    database:'u729991132_railway',
-    port:3306,
+     host:'junction.proxy.rlwy.net',
+    user:'root',
+    password:'KIrqtUpHbSvuQinLjxJIVrlxFZCqqxnl',
+    database:'railway',
+    port:17751,
      multipleStatements: true
 
 });
