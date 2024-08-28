@@ -20,7 +20,7 @@ const mysqlPool = mysql.createPool({
     database:'u729991132_railway',
     port:3306,
     waitForPools: true,
-    PoolLimit: 0, // Ajusta según el rendimiento y necesidades
+    PoolLimit: 60, // Ajusta según el rendimiento y necesidades
     queueLimit: 0
 });
 
