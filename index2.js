@@ -1,3 +1,4 @@
+
 const nodemailer = require('nodemailer');
 const mysql = require('mysql2/promise'); // Usa mysql2/promise
 const express = require('express');
@@ -23,20 +24,19 @@ const mysqlPool = mysql.createPool({
     queueLimit: 0
 });
 
+// SERVIDOR DE CORREO 
+const transporter = nodemailer.createTransport({
+  host: "smtp.hostinger.com",
+  port: 465,
+  auth: {
+    user: "villalasacacias@villalasacacias.com",
+    pass: "Dragonb@ll2"
+  }
+});
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-});
-
-// SERVIDOR DE CORREO 
-const transporter = nodemailer.createTransport({
-    host: "smtp.hostinger.com",
-    port: 465,
-    auth: {
-      user: "villalasacacias@villalasacacias.com",
-      pass: "Dragonb@ll2"
-    }
 });
 
 app.post('/login', async (req, res) => {
@@ -119,8 +119,7 @@ app.post('/login', async (req, res) => {
                     "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = 0, PRIMER_INGRESO = IF(PRIMER_INGRESO IS NULL, CONVERT_TZ(NOW(), @@session.time_zone, '-06:00'), PRIMER_INGRESO) WHERE EMAIL = ?",
                     [username]
                 );
-
-                 if (user.CODIGO_2FA === 1) {
+                  if (user.CODIGO_2FA === 1) {
                     // Generar y enviar código de verificación
                     const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase(); // Código de 6 dígitos en mayúsculas
 
@@ -144,7 +143,7 @@ app.post('/login', async (req, res) => {
                         <p>Atentamente,</p>
                         <p>El equipo de administración de Villa Las Acacias</p>
                       `
-                    };
+                    };
 
                     transporter.sendMail(mailOptions, (error, info) => {
                         if (error) {
@@ -477,7 +476,6 @@ app.post('/register', async (req, res) => {
 
 
 
-
 //******** Verificar registro ********
 app.post('/verify', async (req, res) => {
   const { EMAIL, CODIGO_VERIFICACION } = req.body;
@@ -537,9 +535,10 @@ app.post('/verify', async (req, res) => {
     res.status(200).json({ message: 'Correo verificado exitosamente' });
   } catch (error) {
     console.error('Error al procesar la verificación:', error);
-    res.status(500).json({ message: 'Error al procesar la verificación' });
-  }
+    res.status(500).json({ message: 'Error al procesar la verificación' });
+  }
 });
+
 
 
 
@@ -881,9 +880,10 @@ app.post('/registrar_visitas', async (req, res) => {
     });
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).json({ message: 'Error en el servidor' });
-  }
+    res.status(500).json({ message: 'Error en el servidor' });
+  }
 });
+
 
 
 
@@ -1059,93 +1059,7 @@ app.get('/consultar_reservaciones', async (req, res) => {
   }
 });
 
-// Ruta para consultar reservaciones futuras
-app.get('/consulta_reservaciones_futuras', async (req, res) => {
-  let connection;
-  try {
-    // Obtener una conexión del pool
-    connection = await mysqlPool.getConnection();
 
-    // Consulta SQL
-    const query = `
-      SELECT 
-          r.ID_RESERVA, 
-          r.ID_PERSONA, 
-          i.NOMBRE_INSTALACION, 
-          e.DESCRIPCION AS ESTADO_RESERVA, 
-          r.TIPO_EVENTO, 
-          r.HORA_FECHA
-      FROM 
-          TBL_RESERVAS r
-      JOIN 
-          TBL_INSTALACIONES i ON r.ID_INSTALACION = i.ID_INSTALACION
-      JOIN 
-          TBL_ESTADO_RESERVA e ON r.ID_ESTADO_RESERVA = e.ID_ESTADO_RESERVA
-      WHERE 
-          r.HORA_FECHA >= CURDATE()
-      ORDER BY 
-          r.HORA_FECHA ASC;
-    `;
-
-    // Ejecutar la consulta
-    const [results] = await connection.query(query);
-
-    // Retornar los resultados a la aplicación Flutter
-    res.json(results);
-  } catch (err) {
-    console.error('Error al ejecutar la consulta:', err);
-    res.status(500).send('Error en el servidor');
-  } finally {
-    if (connection) {
-      // Liberar la conexión de vuelta al pool
-      connection.release();
-    }
-  }
-});
-
-// Ruta para obtener los horarios de las reservaciones
-app.get('/obtener_horarios', async (req, res) => {
-  let connection;
-  try {
-    // Obtener una conexión del pool
-    connection = await mysqlPool.getConnection();
-
-    // Consulta SQL
-    const query = `
-      SELECT 
-          ID_PARAMETRO, PARAMETRO, VALOR
-      FROM 
-          TBL_MS_PARAMETROS
-      WHERE 
-          ID_PARAMETRO IN (9, 10, 11, 12, 13, 14)
-    `;
-
-    // Ejecutar la consulta
-    const [results] = await connection.query(query);
-
-    // Formatear los resultados en una lista
-    const horarios = [
-      { "jornada": "Lunes a viernes matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 9)?.VALOR || 'No disponible' },
-      { "jornada": "Lunes a viernes vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 10)?.VALOR || 'No disponible' },
-      { "jornada": "Sabado matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 11)?.VALOR || 'No disponible' },
-      { "jornada": "Sabado vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 12)?.VALOR || 'No disponible' },
-      { "jornada": "Domingo matutino ", "Horarios": results.find(row => row.ID_PARAMETRO === 13)?.VALOR || 'No disponible' },
-      { "jornada": "Domingo vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 14)?.VALOR || 'No disponible' },
-    ];
-
-    // Retornar los horarios formateados
-    res.json(horarios);
-
-  } catch (err) {
-    console.error('Error al ejecutar la consulta:', err);
-    res.status(500).send('Error en el servidor');
-  } finally {
-    if (connection) {
-      // Liberar la conexión de vuelta al pool
-      connection.release();
-    }
-  }
-});
 
 //********** Consultar Visitas *********
 app.get('/consultar_visitas', async (req, res) => {
@@ -1202,6 +1116,93 @@ app.get('/consultar_visitas', async (req, res) => {
   }
 });
 
+// Ruta para consultar reservaciones futuras
+app.get('/consulta_reservaciones_futuras', async (req, res) => {
+  let connection;
+  try {
+    // Obtener una conexión del pool
+    connection = await mysqlPool.getConnection();
+
+    // Consulta SQL
+    const query = `
+      SELECT 
+          r.ID_RESERVA, 
+          r.ID_PERSONA, 
+          i.NOMBRE_INSTALACION, 
+          e.DESCRIPCION AS ESTADO_RESERVA, 
+          r.TIPO_EVENTO, 
+          r.HORA_FECHA
+      FROM 
+          TBL_RESERVAS r
+      JOIN 
+          TBL_INSTALACIONES i ON r.ID_INSTALACION = i.ID_INSTALACION
+      JOIN 
+          TBL_ESTADO_RESERVA e ON r.ID_ESTADO_RESERVA = e.ID_ESTADO_RESERVA
+      WHERE 
+          r.HORA_FECHA >= CURDATE()
+      ORDER BY 
+          r.HORA_FECHA ASC;
+    `;
+
+    // Ejecutar la consulta
+    const [results] = await connection.query(query);
+
+    // Retornar los resultados a la aplicación Flutter
+    res.json(results);
+  } catch (err) {
+    console.error('Error al ejecutar la consulta:', err);
+    res.status(500).send('Error en el servidor');
+  } finally {
+    if (connection) {
+      // Liberar la conexión de vuelta al pool
+      connection.release();
+    }
+  }
+});
+
+// Ruta para obtener los horarios de las reservaciones
+app.get('/obtener_horarios', async (req, res) => {
+  let connection;
+  try {
+    // Obtener una conexión del pool
+    connection = await mysqlPool.getConnection();
+
+    // Consulta SQL
+    const query = `
+      SELECT 
+          ID_PARAMETRO, PARAMETRO, VALOR
+      FROM 
+          TBL_MS_PARAMETROS
+      WHERE 
+          ID_PARAMETRO IN (9, 10, 11, 12, 13, 14)
+    `;
+
+    // Ejecutar la consulta
+    const [results] = await connection.query(query);
+
+    // Formatear los resultados en una lista
+    const horarios = [
+      { "jornada": "Lunes a viernes matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 9)?.VALOR || 'No disponible' },
+      { "jornada": "Lunes a viernes vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 10)?.VALOR || 'No disponible' },
+      { "jornada": "Sabado matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 11)?.VALOR || 'No disponible' },
+      { "jornada": "Sabado vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 12)?.VALOR || 'No disponible' },
+      { "jornada": "Domingo matutino ", "Horarios": results.find(row => row.ID_PARAMETRO === 13)?.VALOR || 'No disponible' },
+      { "jornada": "Domingo vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 14)?.VALOR || 'No disponible' },
+    ];
+
+    // Retornar los horarios formateados
+    res.json(horarios);
+
+  } catch (err) {
+    console.error('Error al ejecutar la consulta:', err);
+    res.status(500).send('Error en el servidor');
+  } finally {
+    if (connection) {
+      // Liberar la conexión de vuelta al pool
+      connection.release();
+    }
+  }
+});
 
 
 //********* Consultar familia ************
@@ -1412,9 +1413,13 @@ app.post('/nueva_reserva', async (req, res) => {
     res.status(201).json({ message: 'Reserva creada exitosamente', reservaId: insertResult.insertId });
   } catch (error) {
     console.error('Error al crear la reserva:', error);
-    res.status(500).json({ error: 'Error al crear la reserva' });
-  }
+    res.status(500).json({ error: 'Error al crear la reserva' });
+  }
 });
+
+
+
+
 
 // ******* Tipos de Instalaciones *******
 app.get('/instalaciones', async (req, res) => {
@@ -1597,7 +1602,10 @@ app.post('/nueva_persona', async (req, res) => {
       }
 
       await connection.query(updatePersonaQuery, queryParams);
-    await connection.query('UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?', [usuarioId]);
+
+      // Actualizar PRIMER_INGRESO_COMPLETADO a 1 en TBL_MS_USUARIO
+      await connection.query('UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?', [usuarioId]);
+
       connection.release(); // Liberar la conexión
 
       console.log('ID_PERSONA actualizado:', ID_PERSONA);
@@ -1621,7 +1629,7 @@ app.post('/nueva_persona', async (req, res) => {
                         <p>Atentamente,</p>
                         <p>El equipo de administración de Villa Las Acacias</p>
                       `
-                    };
+                    };
           transporter.sendMail(mailOptions, (err) => {
               if (err) {
                   console.error('Error al enviar el correo:', err);
@@ -1631,12 +1639,13 @@ app.post('/nueva_persona', async (req, res) => {
           });
       }
 
-      res.status(201).json({ success: true, message: 'Persona actualizada correctamente' });
+      res.status(201).json({ success: true, message: 'Persona actualizada correctamente y PRIMER_INGRESO_COMPLETADO establecido en 1' });
   } catch (err) {
       console.error('Error al procesar la solicitud:', err);
       res.status(500).json({ error: 'Error al procesar la solicitud' });
   }
 });
+
 
 
 
