@@ -20,7 +20,6 @@ const mysqlPool = mysql.createPool({
     database:'u729991132_railway',
     port:3306,
     waitForPools: true,
-    PoolLimit: 60, // Ajusta según el rendimiento y necesidades
     queueLimit: 0
 });
 
@@ -1331,9 +1330,9 @@ app.post('/nueva_reserva', async (req, res) => {
     const horaReserva = new Date(horaFecha).getHours();
 
     if (horaReserva < 13) {
-      jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_MANANA' : 
-                diaSemana === 6 ? 'HORARIO_SABADO_MANANA' : 
-                'HORARIO_DOMINGO_MANANA';
+      jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_MANAÑA' : 
+                diaSemana === 6 ? 'HORARIO_SABADO_MAÑANA' : 
+                'HORARIO_DOMINGO_MAÑANA';
     } else {
       jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_TARDE' : 
                 diaSemana === 6 ? 'HORARIO_SABADO_TARDE' : 
