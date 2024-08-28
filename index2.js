@@ -1330,7 +1330,7 @@ app.post('/nueva_reserva', async (req, res) => {
     const horaReserva = new Date(horaFecha).getHours();
 
     if (horaReserva < 13) {
-      jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_MANAÑA' : 
+      jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_MAÑANA' : 
                 diaSemana === 6 ? 'HORARIO_SABADO_MAÑANA' : 
                 'HORARIO_DOMINGO_MAÑANA';
     } else {
