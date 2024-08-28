@@ -1173,7 +1173,7 @@ app.get('/obtener_horarios', async (req, res) => {
       FROM 
           TBL_MS_PARAMETROS
       WHERE 
-          ID_PARAMETRO IN (9, 10, 11, 12, 13, 14)
+          ID_PARAMETRO IN (5, 6, 7, 8, 9, 10)
     `;
 
     // Ejecutar la consulta
