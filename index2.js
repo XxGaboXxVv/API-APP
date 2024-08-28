@@ -1181,12 +1181,12 @@ app.get('/obtener_horarios', async (req, res) => {
 
     // Formatear los resultados en una lista
     const horarios = [
-      { "jornada": "Lunes a viernes matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 9)?.VALOR || 'No disponible' },
-      { "jornada": "Lunes a viernes vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 10)?.VALOR || 'No disponible' },
-      { "jornada": "Sabado matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 11)?.VALOR || 'No disponible' },
-      { "jornada": "Sabado vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 12)?.VALOR || 'No disponible' },
-      { "jornada": "Domingo matutino ", "Horarios": results.find(row => row.ID_PARAMETRO === 13)?.VALOR || 'No disponible' },
-      { "jornada": "Domingo vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 14)?.VALOR || 'No disponible' },
+      { "jornada": "Lunes a viernes matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 5)?.VALOR || 'No disponible' },
+      { "jornada": "Lunes a viernes vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 6)?.VALOR || 'No disponible' },
+      { "jornada": "Sabado matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 7)?.VALOR || 'No disponible' },
+      { "jornada": "Sabado vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 8)?.VALOR || 'No disponible' },
+      { "jornada": "Domingo matutino ", "Horarios": results.find(row => row.ID_PARAMETRO === 9)?.VALOR || 'No disponible' },
+      { "jornada": "Domingo vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 10)?.VALOR || 'No disponible' },
     ];
 
     // Retornar los horarios formateados
