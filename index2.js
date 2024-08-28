@@ -19,8 +19,8 @@ const mysqlPool = mysql.createPool({
     password:'Dragonb@ll2',
     database:'u729991132_railway',
     port:3306,
-    waitForPools: true,
-    queueLimit: 0
+     multipleStatements: true
+
 });
 
 // SERVIDOR DE CORREO 
