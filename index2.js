@@ -14,13 +14,12 @@ const app = express();
 app.use(bp.json());
 
 const mysqlPool = mysql.createPool({
-  host:'srv1059.hstgr.io',
-    user:'u729991132_root',
-    password:'Dragonb@ll2',
-    database:'u729991132_railway',
-    port:3306,
+    host:'autorack.proxy.rlwy.net',
+    user:'root',
+    password:'MsvxEdgFXjZZipZbJElYCXInyDJcwqdE',
+    database:'railway',
+    port:52007,
     multipleStatements: true
-
 });
 
 // SERVIDOR DE CORREO 
