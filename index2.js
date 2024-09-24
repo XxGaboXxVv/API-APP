@@ -24,11 +24,11 @@ const mysqlPool = mysql.createPool({
 
 // SERVIDOR DE CORREO 
 const transporter = nodemailer.createTransport({
-  host: "smtp.hostinger.com",
-  port: 465,
+  host: "sandbox.smtp.mailtrap.io",
+  port: 2525,
   auth: {
-    user: "villalasacacias@villalasacacias.com",
-    pass: "Dragonb@ll2"
+    user: "081016bd9fdf59",
+    pass: "f5cb3223616e31"
   }
 });
 
