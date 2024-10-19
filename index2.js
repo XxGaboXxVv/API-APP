@@ -14,23 +14,37 @@ const app = express();
 app.use(bp.json());
 
 const mysqlPool = mysql.createPool({
-    host:'autorack.proxy.rlwy.net',
-    user:'root',
-    password:'MsvxEdgFXjZZipZbJElYCXInyDJcwqdE',
-    database:'railway',
-    port:52007,
-    multipleStatements: true
+    host:'82.197.82.66',
+    user:'u995289331_root',
+    password:'CodeM@sters123',
+    database:'u995289331_railway',
+    port:3306,
+    waitForPools: true,
+    PoolLimit: 0, // Ajusta según el rendimiento y necesidades
+    queueLimit: 0
 });
 
 // SERVIDOR DE CORREO 
 const transporter = nodemailer.createTransport({
-  host: "sandbox.smtp.mailtrap.io",
-  port: 2525,
+  host: "smtp.hostinger.com",
+  port: 465,
   auth: {
-    user: "081016bd9fdf59",
-    pass: "f5cb3223616e31"
+    user: "villaslasacacias@villalasacacias.com",
+    pass: "Villlasacacias123@"
   }
 });
+
+/*
+// SERVIDOR DE CORREO 
+const transporter = nodemailer.createTransport({
+  host: "smtp.hostinger.com",
+  port: 465,
+  auth: {
+    user: "villalasacacias@villalasacacias.com",
+    pass: "Dragonb@ll2"
+  }
+});
+*/
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
@@ -65,23 +79,14 @@ app.post('/login', async (req, res) => {
 
         const token = generateToken();  // Generar el token
 
-        if (user.ID_ESTADO_USUARIO === 5) {
-            const connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
-            const [adminRows] = await connection.query(
-                "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1"
-            );
-            connection.release(); // Liberar la conexión
-
-            const adminEmails = adminRows.map(admin => admin.EMAIL);
-            return res.status(402).json({
-                message: "Comuníquese con los administradores para el uso de la aplicación",
-                adminEmails: adminEmails,
-                token: token  // Enviar token en la respuesta
-            });
-        } else if (user.ID_ESTADO_USUARIO === 2) {
-            return res.status(403).send("Usuario inactivo");
+        if (user.ID_ESTADO_USUARIO === 2) {
+            return res.status(402).send("Usuario inactivo");
         } else if (user.ID_ESTADO_USUARIO === 3) {
-            return res.status(403).send("Usuario ha sido bloqueado");
+          return res.status(403).send("Usuario bloqueado");
+        } else if (user.ID_ESTADO_USUARIO === 4) {
+          return res.status(404).send("Usuario Nuevo");
+        } else if (user.ID_ESTADO_USUARIO === 5) {
+          return res.status(405).send("Usuario pendiente");
         } else {
             const passwordIsValid = bcrypt.compareSync(password, user.CONTRASEÑA);
 
@@ -93,9 +98,11 @@ app.post('/login', async (req, res) => {
                 );
 
                 const [paramRows] = await connection.query(
-                    "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE ID_PARAMETRO = 1"
-                );
-                connection.release(); // Liberar la conexión
+                  "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = ?",
+                  ['INTENTOS_FALLIDOS']
+              );
+              connection.release();
+               // Liberar la conexión
 
                 const maxLoginAttempts = parseInt(paramRows[0].VALOR, 10);
                 if (user.INTENTOS_FALLIDOS + 1 >= maxLoginAttempts + 1) {
@@ -469,11 +476,6 @@ app.post('/register', async (req, res) => {
   }
 });
 
-
-
-
-
-
 //******** Verificar registro ********
 app.post('/verify', async (req, res) => {
   const { EMAIL, CODIGO_VERIFICACION } = req.body;
@@ -537,15 +539,12 @@ app.post('/verify', async (req, res) => {
   }
 });
 
-
-
-
 //*********** RESTABLECER CONTRASENA    *********** 
 app.post('/restablecer_contrasena', async (req, res) => {
     const { email } = req.body;
 
     if (!email) {
-        return res.status(400).json({ message: 'El campo de correo electrónico es requerido' });
+        return res.status(400).json({ message: 'El campo de correo electrónico es requerido.' });
     }
 
     try {
@@ -557,6 +556,12 @@ app.post('/restablecer_contrasena', async (req, res) => {
         if (userResults.length === 0) {
             connection.release(); // Liberar la conexión
             return res.status(404).json({ message: 'Usuario no encontrado' });
+        }
+
+        const estadoUsuario = userResults[0].ID_ESTADO_USUARIO;
+
+        if ([2, 4, 5].includes(estadoUsuario)) {
+          return res.status(405).json({ message: 'Estado de usuario denegado.' });
         }
 
         const tempPassword = crypto.randomBytes(4).toString('hex');
@@ -711,13 +716,10 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
       console.error('Contraseña actual incorrecta');
       return res.status(401).json({ message: 'Contraseña actual incorrecta' });
     }
-
     // Hashear la nueva contraseña
     const nuevaHashed = await bcrypt.hash(nueva, 10);
-
     // Insertar la contraseña actual en la tabla TBL_MS_HIST_CONTRASEÑA
     await connection.query('INSERT INTO TBL_MS_HIST_CONTRASEÑA (ID_USUARIO, CONTRASEÑA) VALUES (?, ?)', [userId, contrasenaActual]);
-
     // Actualizar la nueva contraseña en la tabla TBL_MS_USUARIO
     await connection.query('UPDATE TBL_MS_USUARIO SET CONTRASEÑA = ? WHERE ID_USUARIO = ?', [nuevaHashed, userId]);
 
@@ -729,25 +731,6 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     res.status(500).json({ message: 'Error al cambiar la contraseña' });
   }
 });
-
-
-  
-  
-  // ****** Ruta para cerrar sesión
-app.post('/logout', verifyToken, (req, res) => {
-  const token = req.headers['authorization'].split(' ')[1];
-
-  // Aquí deberías agregar el token a una lista negra o a un almacenamiento para invalidarlo
-  // Por ejemplo, puedes almacenar el token en una base de datos o en la memoria para su invalidación.
-
-  // Ejemplo básico de invalidación de token
-  // Suponiendo que tienes una función para almacenar tokens en una lista negra
-  blacklistToken(token);
-
-  return res.status(200).json({ message: 'Sesión cerrada exitosamente' });
-});
-
-
 
 // ************   Ruta para registrar una visita
 app.post('/registrar_visitas', async (req, res) => {
@@ -788,12 +771,15 @@ app.post('/registrar_visitas', async (req, res) => {
     const fechaActual = moment().tz('America/Tegucigalpa');
     const fechaCalculada = fechaActual.add(horas, 'hours').format('YYYY-MM-DD HH:mm:ss');
 
+    // Convertir FECHA_VENCIMIENTO al formato 'YYYY-MM-DD HH:mm:ss'
+    const fechaVencimiento = moment(FECHA_VENCIMIENTO, 'DD-MM-YYYY HH:mm').format('YYYY-MM-DD HH:mm:ss');
+
     let insertQuery, insertParams;
 
     if (isRecurrentVisitor) {
       const fechaActual = moment().tz('America/Tegucigalpa');
       insertQuery = 'INSERT INTO TBL_VISITANTES_RECURRENTES (ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?, ?)';
-      insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaActual.format('YYYY-MM-DD HH:mm:ss'), FECHA_VENCIMIENTO];
+      insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaActual.format('YYYY-MM-DD HH:mm:ss'), fechaVencimiento];
     } else {
       insertQuery = 'INSERT INTO TBL_REGVISITAS (ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?, ?)';
       insertParams = [ID_PERSONA, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaCalculada];
@@ -809,11 +795,11 @@ app.post('/registrar_visitas', async (req, res) => {
     if (isRecurrentVisitor) {
       const fechaActual = moment().tz('America/Tegucigalpa');
       insertBitacoraQuery = 'INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTES_RECURRENTES, NUM_PERSONA, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?)';
-      insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaActual.format('YYYY-MM-DD HH:mm:ss'), FECHA_VENCIMIENTO];
+      insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaActual.format('YYYY-MM-DD HH:mm:ss'), fechaVencimiento];
     } else {
       const fechaActual = moment().tz('America/Tegucigalpa');
       insertBitacoraQuery = 'INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTE, NUM_PERSONA, NUM_PLACA, FECHA_HORA,FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?)';
-      insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA,fechaActual.format('YYYY-MM-DD HH:mm:ss'), fechaCalculada];
+      insertBitacoraParams = [ID_PERSONA, ID_VISITANTE, NUM_PERSONAS, NUM_PLACA, fechaActual.format('YYYY-MM-DD HH:mm:ss'), fechaCalculada];
     }
 
     await connection.query(insertBitacoraQuery, insertBitacoraParams);
@@ -844,7 +830,7 @@ app.post('/registrar_visitas', async (req, res) => {
         DNI_VISITANTE,
         NUM_PERSONAS,
         NUM_PLACA,
-        FECHA_VENCIMIENTO
+        FECHA_VENCIMIENTO: fechaVencimiento
       };
     } else {
       qrData = {
@@ -868,7 +854,7 @@ app.post('/registrar_visitas', async (req, res) => {
     });
 
     const insertQRQuery = 'INSERT INTO TBL_QR (ID_VISITANTE, QR_CODE, FECHA_VENCIMIENTO) VALUES (?, ?, ?)';
-    await connection.query(insertQRQuery, [ID_VISITANTE, qrUrl, isRecurrentVisitor ? FECHA_VENCIMIENTO : fechaCalculada]);
+    await connection.query(insertQRQuery, [ID_VISITANTE, qrUrl, isRecurrentVisitor ? fechaVencimiento : fechaCalculada]);
 
     connection.release();
 
@@ -881,10 +867,6 @@ app.post('/registrar_visitas', async (req, res) => {
     res.status(500).json({ message: 'Error en el servidor' });
   }
 });
-
-
-
-
 
 //validar QR
 
@@ -917,11 +899,6 @@ app.post('/validateQR', async (req, res) => {
     res.status(500).json({ message: 'Error al validar el código QR' });
   }
 });
-
-
-
-
-
 
 // Crear un endpoint para obtener todos los anuncios
 app.get('/anuncios_eventos', async (req, res) => {
@@ -1028,26 +1005,27 @@ app.get('/consultar_reservaciones', async (req, res) => {
 
     // Obtener todas las reservas para ese ID_PERSONA
     const query = `
-      SELECT 
-        p.NOMBRE_PERSONA, 
-        i.NOMBRE_INSTALACION, 
-        e.DESCRIPCION, 
-        r.HORA_FECHA,
-        r.TIPO_EVENTO
-      FROM 
-        TBL_RESERVAS r
-      INNER JOIN 
-        TBL_PERSONAS p ON r.ID_PERSONA = p.ID_PERSONA
-      INNER JOIN 
-        TBL_INSTALACIONES i ON r.ID_INSTALACION = i.ID_INSTALACION
-      INNER JOIN 
-        TBL_ESTADO_RESERVA e ON r.ID_ESTADO_RESERVA = e.ID_ESTADO_RESERVA
-      WHERE 
-        r.ID_PERSONA = ?
-    `;
-
+SELECT 
+  p.NOMBRE_PERSONA, 
+  i.NOMBRE_INSTALACION, 
+  e.DESCRIPCION, 
+  CONVERT_TZ(r.HORA_FECHA, '+00:00', '-06:00') AS HORA_FECHA,
+  r.TIPO_EVENTO
+  FROM 
+  TBL_RESERVAS r
+  INNER JOIN 
+  TBL_PERSONAS p ON r.ID_PERSONA = p.ID_PERSONA
+  INNER JOIN 
+  TBL_INSTALACIONES i ON r.ID_INSTALACION = i.ID_INSTALACION
+  INNER JOIN 
+  TBL_ESTADO_RESERVA e ON r.ID_ESTADO_RESERVA = e.ID_ESTADO_RESERVA
+  WHERE 
+  r.ID_PERSONA = ? AND 
+    r.HORA_FECHA >= CURDATE()
+    ORDER BY 
+    r.HORA_FECHA ASC;
+  `;
     const [reservasResults] = await connection.query(query, [ID_PERSONA]);
-
     connection.release();
 
     res.json(reservasResults);
@@ -1088,15 +1066,21 @@ app.get('/consultar_visitas', async (req, res) => {
 
     // Consultar los registros de visitas en TBL_REGVISITAS
     const queryRegVisitas = `
-      SELECT NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, NULL AS FECHA_VENCIMIENTO, 'No recurrente' AS TIPO
-      FROM TBL_REGVISITAS 
-      WHERE ID_PERSONA = ?`;
-
-    // Consultar los registros de visitas en TBL_VISITANTES_RECURRENTES
-    const queryVisitantesRecurrentes = `
-      SELECT NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO, 'Recurrente' AS TIPO
-      FROM TBL_VISITANTES_RECURRENTES 
-      WHERE ID_PERSONA = ?`;
+    SELECT NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, 
+           DATE_FORMAT(FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
+           NULL AS FECHA_VENCIMIENTO, 
+           'No recurrente' AS TIPO
+    FROM TBL_REGVISITAS 
+    WHERE ID_PERSONA = ?`; 
+  
+  const queryVisitantesRecurrentes = `
+    SELECT NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, 
+           DATE_FORMAT(FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
+           DATE_FORMAT(FECHA_VENCIMIENTO, '%d/%m/%Y %H:%i') AS FECHA_VENCIMIENTO, 
+           'Recurrente' AS TIPO
+    FROM TBL_VISITANTES_RECURRENTES 
+    WHERE ID_PERSONA = ?`;
+  
 
     const [regVisitasResults] = await connection.query(queryRegVisitas, [ID_PERSONA]);
     const [visitantesRecurrentesResults] = await connection.query(queryVisitantesRecurrentes, [ID_PERSONA]);
@@ -1129,7 +1113,7 @@ app.get('/consulta_reservaciones_futuras', async (req, res) => {
           i.NOMBRE_INSTALACION, 
           e.DESCRIPCION AS ESTADO_RESERVA, 
           r.TIPO_EVENTO, 
-          r.HORA_FECHA
+          CONVERT_TZ(r.HORA_FECHA, '+00:00', '-06:00') AS HORA_FECHA
       FROM 
           TBL_RESERVAS r
       JOIN 
@@ -1158,7 +1142,7 @@ app.get('/consulta_reservaciones_futuras', async (req, res) => {
   }
 });
 
-// Ruta para obtener los horarios de las reservaciones
+// ***********   Ruta para obtener los horarios de las reservaciones
 app.get('/obtener_horarios', async (req, res) => {
   let connection;
   try {
@@ -1168,11 +1152,11 @@ app.get('/obtener_horarios', async (req, res) => {
     // Consulta SQL
     const query = `
       SELECT 
-          ID_PARAMETRO, PARAMETRO, VALOR
+        PARAMETRO, VALOR
       FROM 
-          TBL_MS_PARAMETROS
+        TBL_MS_PARAMETROS
       WHERE 
-          ID_PARAMETRO IN (5, 6, 7, 8, 9, 10)
+        PARAMETRO IN ('HORARIO_LUNES_VIERNES_MANAÑA', 'HORARIO_LUNES_VIERNES_TARDE', 'HORARIO_SABADO_MANAÑA', 'HORARIO_SABADO_TARDE', 'HORARIO_DOMINGO_MANAÑA', 'HORARIO_DOMINGO_TARDE')
     `;
 
     // Ejecutar la consulta
@@ -1180,12 +1164,18 @@ app.get('/obtener_horarios', async (req, res) => {
 
     // Formatear los resultados en una lista
     const horarios = [
-      { "jornada": "Lunes a viernes matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 5)?.VALOR || 'No disponible' },
-      { "jornada": "Lunes a viernes vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 6)?.VALOR || 'No disponible' },
-      { "jornada": "Sabado matutino", "Horarios": results.find(row => row.ID_PARAMETRO === 7)?.VALOR || 'No disponible' },
-      { "jornada": "Sabado vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 8)?.VALOR || 'No disponible' },
-      { "jornada": "Domingo matutino ", "Horarios": results.find(row => row.ID_PARAMETRO === 9)?.VALOR || 'No disponible' },
-      { "jornada": "Domingo vespertino", "Horarios": results.find(row => row.ID_PARAMETRO === 10)?.VALOR || 'No disponible' },
+      { 
+        "Días": "Lunes a viernes", 
+        "Horarios": `${results.find(row => row.PARAMETRO === 'HORARIO_LUNES_VIERNES_MANAÑA')?.VALOR || 'No disponible'} y ${results.find(row => row.PARAMETRO === 'HORARIO_LUNES_VIERNES_TARDE')?.VALOR || 'No disponible'}` 
+      },
+      { 
+        "Días": "Sábado", 
+        "Horarios": `${results.find(row => row.PARAMETRO === 'HORARIO_SABADO_MANAÑA')?.VALOR || 'No disponible'} y ${results.find(row => row.PARAMETRO === 'HORARIO_SABADO_TARDE')?.VALOR || 'No disponible'}` 
+      },
+      { 
+        "Días": "Domingo", 
+        "Horarios": `${results.find(row => row.PARAMETRO === 'HORARIO_DOMINGO_MANAÑA')?.VALOR || 'No disponible'} y ${results.find(row => row.PARAMETRO === 'HORARIO_DOMINGO_TARDE')?.VALOR || 'No disponible'}` 
+      }
     ];
 
     // Retornar los horarios formateados
@@ -1201,6 +1191,7 @@ app.get('/obtener_horarios', async (req, res) => {
     }
   }
 });
+
 
 
 //********* Consultar familia ************
@@ -1321,17 +1312,19 @@ app.post('/nueva_reserva', async (req, res) => {
 
     const ID_INSTALACION = instalacionResults[0].ID_INSTALACION;
 
+    const horaFechaYMDHM = moment(horaFecha, 'DD-MM-YYYY HH:mm').format('YYYY-MM-DD HH:mm:ss');
+
     // Determinar el día de la semana
-    const diaSemana = new Date(horaFecha).getDay();
+    const diaSemana = new Date(horaFechaYMDHM).getDay();
     let jornada = '';
 
     // Determinar si la reserva es por la mañana o la tarde
-    const horaReserva = new Date(horaFecha).getHours();
+    const horaReserva = new Date(horaFechaYMDHM).getHours();
 
     if (horaReserva < 13) {
-      jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_MAÑANA' : 
-                diaSemana === 6 ? 'HORARIO_SABADO_MAÑANA' : 
-                'HORARIO_DOMINGO_MAÑANA';
+      jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_MANAÑA' : 
+                diaSemana === 6 ? 'HORARIO_SABADO_MANAÑA' : 
+                'HORARIO_DOMINGO_MANAÑA';
     } else {
       jornada = diaSemana >= 1 && diaSemana <= 5 ? 'HORARIO_LUNES_VIERNES_TARDE' : 
                 diaSemana === 6 ? 'HORARIO_SABADO_TARDE' : 
@@ -1349,7 +1342,7 @@ app.post('/nueva_reserva', async (req, res) => {
     const [horaInicio, horaFin] = parametrosResults[0].VALOR.split('-').map(h => h.trim());
 
     // Verificar si la hora solicitada está dentro del horario permitido
-    const hora = horaFecha.split(' ')[1];
+    const hora = horaFechaYMDHM.split(' ')[1];
     if (hora < horaInicio || hora > horaFin) {
       connection.release();
       return res.status(400).json({ error: 'El horario ingresado no está permitido según los parámetros configurados' });
@@ -1361,7 +1354,7 @@ app.post('/nueva_reserva', async (req, res) => {
        WHERE ID_INSTALACION = ? 
        AND DATE(HORA_FECHA) = DATE(?) 
        AND TIME(HORA_FECHA) BETWEEN TIME(?) AND TIME(?)`,
-      [ID_INSTALACION, horaFecha, horaInicio, horaFin]
+      [ID_INSTALACION, horaFechaYMDHM, horaInicio, horaFin]
     );
 
     if (reservaResults.length > 0) {
@@ -1372,7 +1365,7 @@ app.post('/nueva_reserva', async (req, res) => {
     // Insertar la reserva si no hay conflicto
     const [insertResult] = await connection.query(
       'INSERT INTO TBL_RESERVAS (ID_PERSONA, ID_INSTALACION, ID_ESTADO_RESERVA, TIPO_EVENTO, HORA_FECHA) VALUES (?, ?, 3, ?, ?)',
-      [ID_PERSONA, ID_INSTALACION, tipoEvento, horaFecha]
+      [ID_PERSONA, ID_INSTALACION, tipoEvento, horaFechaYMDHM]
     );
 
     // Obtener los correos de los administradores
@@ -1392,7 +1385,7 @@ app.post('/nueva_reserva', async (req, res) => {
         <p><strong>Condominio:</strong> ${P_CONDOMINIO}</p>
         <p><strong>Instalación:</strong> ${nombreInstalacion}</p>
         <p><strong>Tipo de Evento:</strong> ${tipoEvento}</p>
-        <p><strong>Fecha y Hora:</strong> ${horaFecha}</p>
+        <p><strong>Fecha y Hora:</strong> ${horaFechaYMDHM}</p>
         <p>Les solicitamos brindar el apoyo necesario para que la nueva reservación se ejecute de manera adecuada.</p>
         <p>Atentamente,</p>
         <p>El equipo de administración de Villa Las Acacias</p>
@@ -1469,7 +1462,7 @@ app.post('/set2FAStatus', async (req, res) => {
 
 
 
-//************** PERSONAS *************
+//************** GET para estado de la persona *************
 app.get('/personas', async (req, res) => {
   try {
     const connection = await mysqlPool.getConnection();
@@ -1509,6 +1502,17 @@ app.get('/parentesco', async (req, res) => {
   }
 });
 
+app.get('/condominio', async (req, res) => {
+  try {
+    const connection = await mysqlPool.getConnection();
+    const [results] = await connection.query('SELECT DESCRIPCION FROM TBL_CONDOMINIOS');
+    connection.release();
+    res.json(results);
+  } catch (err) {
+    console.error('Error al ejecutar la consulta:', err);
+    res.status(500).json({ error: 'Error al ejecutar la consulta' });
+  }
+});
 
 
 //********* NUEVA PERSONA*********
@@ -1583,9 +1587,9 @@ app.post('/nueva_persona', async (req, res) => {
 
       if (isAdminRequired) {
           updatePersonaQuery = `
-              UPDATE TBL_PERSONAS 
-              SET DNI_PERSONA = ?, ID_CONTACTO = ?, 
-              ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?, 
+              UPDATE TBL_PERSONAS
+              SET DNI_PERSONA = ?, ID_CONTACTO = ?,
+              ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?,
               ID_CONDOMINIO = ?, ID_PADRE = 1
               WHERE ID_PERSONA = ?
           `;
@@ -1645,12 +1649,6 @@ app.post('/nueva_persona', async (req, res) => {
 });
 
 
-
-
-
-
-
-
 //********** Actualizar lo PRIMER_INGRESO_COMPLETADO ********
 app.put('/desactivarPersona', async (req, res) => {
   const { ID_USUARIO } = req.body;
@@ -1678,8 +1676,11 @@ app.put('/desactivarPersona', async (req, res) => {
   }
 });
 
+//Identificar el ID_PADRE del residente y mostrarle las solicitudes
 app.get('/solicitudes', async (req, res) => {
     const usuarioId = req.query.usuario_id;
+    //const {usuarioId}= req.body;
+    console.log(usuarioId);
 
     if (!usuarioId) {
         return res.status(400).json({ error: 'Se requiere usuario_id' });
@@ -1696,7 +1697,7 @@ app.get('/solicitudes', async (req, res) => {
 
         if (usuarioResults.length === 0) {
             connection.release(); // Liberar la conexión
-            return res.status(404).json({ error: 'Usuario no encontrado' });
+            return res.status(404).json({ message: 'Usuario no encontrado' });
         }
 
         const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
@@ -1709,7 +1710,7 @@ app.get('/solicitudes', async (req, res) => {
 
         if (personaResults.length === 0) {
             connection.release(); // Liberar la conexión
-            return res.status(404).json({ error: 'Persona no encontrada' });
+            return res.status(404).json({ message: 'Persona no encontrada' });
         }
 
         const { ID_PERSONA, ID_PADRE, ID_CONDOMINIO } = personaResults[0];
@@ -1717,7 +1718,7 @@ app.get('/solicitudes', async (req, res) => {
         // Verificar si el usuario es administrador (ID_PADRE debe ser 1)
         if (ID_PADRE !== 1) {
             connection.release(); // Liberar la conexión
-            return res.status(403).json({ error: 'No tienes los permisos para poder ingresar' });
+          return res.status(403).json({ message: 'No tienes los permisos para poder ingresar' });
         }
 
         // Obtener todos los nombres en ese ID_CONDOMINIO que tengan el estado pendiente (ID_ESTADO_USUARIO = 5)
@@ -1741,7 +1742,7 @@ app.get('/solicitudes', async (req, res) => {
         connection.release(); // Liberar la conexión
 
         if (residentesResults.length === 0) {
-            return res.status(404).json({ error: 'No hay residentes pendientes de aprobación' });
+            return res.status(404).json({ message: 'No hay residentes pendientes de aprobación' });
         }
 
         res.status(200).json({ residentesPendientes: residentesResults });
@@ -1751,6 +1752,7 @@ app.get('/solicitudes', async (req, res) => {
     }
 });
 
+//***** Acepta las solicitudes solo el que es ID_PADRE
 app.post('/aceptar', async (req, res) => {
     const { idUsuario } = req.body;
 
@@ -1773,24 +1775,112 @@ app.post('/aceptar', async (req, res) => {
     }
 });
 
+//***** Rechaza las solicitudes solo el que es ID_PADRE
 app.post('/rechazar', async (req, res) => {
-    const { idUsuario } = req.body;
+  const { idUsuario } = req.body;
 
-    if (!idUsuario) {
-        return res.status(400).json({ error: 'Se requiere idUsuario' });
-    }
+  if (!idUsuario) {
+      return res.status(400).json({ error: 'Se requiere idUsuario' });
+  }
 
-    console.log('Datos recibidos en /rechazar:', req.body);
+  console.log('Datos recibidos en /rechazar:', req.body);
 
-    try {
-        const [result] = await mysqlPool.query(
-            'UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 2 WHERE ID_USUARIO = ?',
-            [idUsuario]
-        );
+  // Iniciar una conexión de transacción
+  const connection = await mysqlPool.getConnection();
+  
+  try {
+      // Iniciar la transacción
+      await connection.beginTransaction();
 
-        res.status(200).send('Solicitud rechazada');
-    } catch (err) {
-        console.error('Error al rechazar la solicitud:', err);
-        res.status(500).send('Error al rechazar la solicitud');
-    }
+      // Obtener el NOMBRE_USUARIO asociado al ID_USUARIO
+      const [userResult] = await connection.query(
+          'SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?',
+          [idUsuario]
+      );
+
+      if (userResult.length === 0) {
+          return res.status(404).json({ error: 'Usuario no encontrado' });
+      }
+
+      const nombreUsuario = userResult[0].NOMBRE_USUARIO;
+
+      // Eliminar el registro de TBL_PERSONAS basado en el NOMBRE_USUARIO
+      const [deletePerson] = await connection.query(
+          'DELETE FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?',
+          [nombreUsuario]
+      );
+
+      // Eliminar el registro de TBL_MS_USUARIO basado en el ID_USUARIO
+      const [deleteUser] = await connection.query(
+          'DELETE FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?',
+          [idUsuario]
+      );
+
+      // Si ambas eliminaciones se realizaron correctamente, confirmar la transacción
+      await connection.commit();
+
+      res.status(200).send('Solicitud rechazada correctamente');
+  } catch (err) {
+      // En caso de error, revertir los cambios
+      await connection.rollback();
+      console.error('Error al rechazar la solicitud:', err);
+      res.status(500).send('Error al rechazar la solicitud');
+  } finally {
+      // Liberar la conexión
+      connection.release();
+  }
 });
+
+//Confirmar las visitas del QR
+app.post('/confirmar_visita', async (req, res) => {
+  console.log('Datos recibidos:', req.body); 
+ const { nombreResidente, nombreVisitante, numeroPersonas } = req.body;
+
+  try {
+      // Obtener una conexión del pool
+      const connection = await mysqlPool.getConnection();
+
+      // Consulta para buscar el correo electrónico del residente
+      const [rows] = await connection.execute(
+          'SELECT EMAIL FROM TBL_MS_USUARIO WHERE NOMBRE_USUARIO = ?',
+          [nombreResidente] // Usamos el parámetro nombreResidente
+      );
+
+      // Liberar la conexión después de usarla
+      connection.release();
+
+      if (rows.length === 0) {
+          return res.status(404).json({ error: 'Residente no encontrado' });
+      }
+
+      // Capturar el correo electrónico del residente
+      const emailResidente = rows[0].EMAIL;
+      const fechaActual = moment.tz('America/Tegucigalpa').format('DD-MM-YYYY HH:mm');
+
+      // Redactar el correo
+      const mailOptions = {
+          from: 'villalasacacias@villalasacacias.com',
+          to: emailResidente, // Enviar el correo al residente encontrado
+          subject: 'Confirmación de Visita',
+          html: `
+              <p>Estimado ${nombreResidente},</p>
+              <p>Le informamos que ha llegado un visitante:</p>
+              <p><strong>Nombre del visitante:</strong> ${nombreVisitante}</p>
+              <p><strong>Número de personas:</strong> ${numeroPersonas}</p>
+              <p><strong>Fecha y hora de llegada:</strong> ${fechaActual}</p>
+              <p>Atentamente,</p>
+              <p>El equipo de administración de Villa Las Acacias</p>
+          `
+      };
+
+      // Enviar el correo
+      await transporter.sendMail(mailOptions);
+      console.log('Correo enviado a:', emailResidente);
+      return res.status(200).json({ message: 'Correo enviado exitosamente' });
+
+  } catch (err) {
+      console.error('Error al realizar la operación:', err);
+      return res.status(500).json({ error: 'Error al procesar la solicitud' });
+  }
+});
+
