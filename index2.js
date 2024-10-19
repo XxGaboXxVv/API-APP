@@ -14,24 +14,24 @@ const app = express();
 app.use(bp.json());
 
 const mysqlPool = mysql.createPool({
-    host:'82.197.82.66',
-    user:'u995289331_root',
-    password:'CodeM@sters123',
-    database:'u995289331_railway',
-    port:3306,
-    waitForPools: true,
-    PoolLimit: 0, // Ajusta según el rendimiento y necesidades
-    queueLimit: 0
+  host:'82.197.82.66',
+  user:'u995289331_root',
+  password:'CodeM@sters123',
+  database:'u995289331_railway',
+  port:3306,
+  waitForPools: true,
+  PoolLimit: 0, // Ajusta según el rendimiento y necesidades
+  queueLimit: 0
 });
 
 // SERVIDOR DE CORREO 
 const transporter = nodemailer.createTransport({
-  host: "smtp.hostinger.com",
-  port: 465,
-  auth: {
-    user: "villaslasacacias@villalasacacias.com",
-    pass: "Villlasacacias123@"
-  }
+host: "smtp.hostinger.com",
+port: 465,
+auth: {
+  user: "villaslasacacias@villalasacacias.com",
+  pass: "Villlasacacias123@"
+}
 });
 
 /*
@@ -134,7 +134,7 @@ app.post('/login', async (req, res) => {
                     );
 
                     const mailOptions = {
-                      from: 'villalasacacias@villalasacacias.com',
+                      from: 'villaslasacacias@villalasacacias.com',
                       to: username,
                       subject: 'Código de Verificación 2FA',
                       html: `
