@@ -14,12 +14,14 @@ const app = express();
 app.use(bp.json());
 
 const mysqlPool = mysql.createPool({
-    host:'82.197.82.66',
-    user:'u995289331_root',
-    password:'CodeM@sters123',
-    database:'u995289331_railway',
-    port:3306,
-    multipleStatements: true
+  host:'82.197.82.66',
+  user:'u995289331_root',
+  password:'CodeM@sters123',
+  database:'u995289331_railway',
+  port:3306,
+  waitForPools: true,
+  PoolLimit: 0, // Ajusta según el rendimiento y necesidades
+  queueLimit: 0
 });
 
 // SERVIDOR DE CORREO 
@@ -297,10 +299,6 @@ app.get('/get2FAStatus', async (req, res) => {
 
 
 
-
-
-
-
 //********** REGISTRO *********** 
 
 const secretKey = crypto.randomBytes(32); // Clave secreta de 256 bits
@@ -337,6 +335,19 @@ app.post('/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(CONTRASEÑA, 8);
     const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
     console.log('Conexión a la base de datos establecida.');
+
+        // Verificar si el nombre de usuario ya existe
+        const [existingUser] = await connection.query('SELECT NOMBRE_USUARIO, PRIMER_INGRESO_COMPLETADO FROM TBL_MS_USUARIO WHERE NOMBRE_USUARIO = ?', [NOMBRE_USUARIO]);
+
+        if (existingUser.length > 0) {
+          const usuarioExistente = existingUser[0];
+    
+          if (usuarioExistente.PRIMER_INGRESO_COMPLETADO === 1) {
+            console.error('Persona ya registrada y primer ingreso completado.');
+            connection.release();
+            return res.status(400).json({ message: 'Nombre de persona ya registrado' });
+          }
+        }
 
     // Verificar si el correo ya está registrado y el estado de PRIMER_INGRESO_COMPLETADO
     const [results] = await connection.query('SELECT NOMBRE_USUARIO, PRIMER_INGRESO_COMPLETADO, ID_USUARIO FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
@@ -1716,7 +1727,7 @@ app.get('/solicitudes', async (req, res) => {
         // Verificar si el usuario es administrador (ID_PADRE debe ser 1)
         if (ID_PADRE !== 1) {
             connection.release(); // Liberar la conexión
-          return res.status(403).json({ message: 'No tienes los permisos para poder ingresar' });
+          return res.status(403).json({ message: 'No tienes los permisos para poder ingresarvvvvvvvv' });
         }
 
         // Obtener todos los nombres en ese ID_CONDOMINIO que tengan el estado pendiente (ID_ESTADO_USUARIO = 5)
@@ -1740,7 +1751,7 @@ app.get('/solicitudes', async (req, res) => {
         connection.release(); // Liberar la conexión
 
         if (residentesResults.length === 0) {
-            return res.status(404).json({ message: 'No hay residentes pendientes de aprobación' });
+            return res.status(200).json({ message: 'No hay residentes pendientes de aprobación' });
         }
 
         res.status(200).json({ residentesPendientes: residentesResults });
