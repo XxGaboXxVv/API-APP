@@ -1,4 +1,3 @@
-
 const nodemailer = require('nodemailer');
 const mysql = require('mysql2/promise'); // Usa mysql2/promise
 const express = require('express');
@@ -39,52 +38,11 @@ auth: {
 }
 });
 
-
-
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Ruta para subir la imagen
-// Ruta para subir la imagen
-app.post('/perfil/foto', upload.single('fotoPerfil'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).send('No se proporcionó imagen');
-  }
-
-  const imageBuffer = req.file.buffer;
-  const userId = req.body.usuario_id;
-
-  const query = 'UPDATE TBL_MS_USUARIO SET FOTO_PERFIL = ? WHERE ID_USUARIO = ?';
-  
-  try {
-    const [result] = await mysqlPool.query(query, [imageBuffer, userId]);
-    res.status(200).send('Imagen guardada correctamente');
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Error al guardar la imagen');
-  }
-});
-
-// Ruta para obtener la imagen
-app.get('/perfil/foto/:usuario_id', async (req, res) => {
-  const userId = req.params.usuario_id;
-  const query = 'SELECT FOTO_PERFIL FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?';
-
-  try {
-    const [rows] = await mysqlPool.query(query, [userId]);
-    if (rows.length === 0) {
-      return res.status(404).send('Usuario no encontrado');
-    }
-    const imageBuffer = rows[0].FOTO_PERFIL;
-    const base64Image = imageBuffer.toString('base64');
-    res.json({ fotoPerfil: base64Image });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Error al obtener la imagen');
-  }
-});
 
 
 app.post('/login', async (req, res) => {
