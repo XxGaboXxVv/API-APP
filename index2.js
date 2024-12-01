@@ -1157,7 +1157,7 @@ app.get('/consulta_reservaciones_futuras', async (req, res) => {
           i.NOMBRE_INSTALACION, 
           e.DESCRIPCION AS ESTADO_RESERVA, 
           r.TIPO_EVENTO, 
-          r.HORA_FECHA AS HORA_FECHA
+          r.HORA_FECHA
       FROM 
           TBL_RESERVAS r
       JOIN 
