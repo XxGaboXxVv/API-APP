@@ -1368,7 +1368,7 @@ app.post('/nueva_reserva', async (req, res) => {
     const horaFechaDMAHMS = moment(horaFechaYMDHM).format('DD-MM-YYYY HH:mm');
 
     // Obtener los correos de los administradores
-    const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 4');
+    const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)');
 
     const emailList = adminEmails.map(row => row.EMAIL);
     const mailOptions = {
@@ -1613,7 +1613,7 @@ app.post('/nueva_persona', async (req, res) => {
 
       // Enviar correo si es el primer administrador
       if (isAdminRequired) {
-          const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 4');
+          const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)');
 
           const emailList = adminEmails.map(row => row.EMAIL);
           const mailOptions = {
