@@ -1004,7 +1004,7 @@ SELECT
   p.NOMBRE_PERSONA, 
   i.NOMBRE_INSTALACION, 
   e.DESCRIPCION, 
-  CONVERT_TZ(r.HORA_FECHA, '+00:00', '-06:00') AS HORA_FECHA,
+  r.HORA_FECHA,
   r.TIPO_EVENTO
   FROM 
   TBL_RESERVAS r
@@ -1108,7 +1108,7 @@ app.get('/consulta_reservaciones_futuras', async (req, res) => {
           i.NOMBRE_INSTALACION, 
           e.DESCRIPCION AS ESTADO_RESERVA, 
           r.TIPO_EVENTO, 
-          CONVERT_TZ(r.HORA_FECHA, '+00:00', '-06:00') AS HORA_FECHA
+         r.HORA_FECHA
       FROM 
           TBL_RESERVAS r
       JOIN 
