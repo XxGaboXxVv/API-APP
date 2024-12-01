@@ -1157,7 +1157,7 @@ app.get('/consulta_reservaciones_futuras', async (req, res) => {
           i.NOMBRE_INSTALACION, 
           e.DESCRIPCION AS ESTADO_RESERVA, 
           r.TIPO_EVENTO, 
-          CONVERT_TZ(r.HORA_FECHA, '+00:00', '-06:00') AS HORA_FECHA
+          r.HORA_FECHA AS HORA_FECHA
       FROM 
           TBL_RESERVAS r
       JOIN 
@@ -1235,6 +1235,8 @@ app.get('/obtener_horarios', async (req, res) => {
     }
   }
 });
+
+
 
 //********* Consultar familia ************
 app.get('/consultar_familia', async (req, res) => {
