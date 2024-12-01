@@ -987,64 +987,48 @@ app.get('/perfil', async (req, res) => {
 
 
 //********** Consultar Reservaciones *********
-app.get('/consultar_reservaciones', async (req, res) => {
-  const usuarioId = req.query.usuario_id;
-
+app.get('/consulta_reservaciones_futuras', async (req, res) => {
+  let connection;
   try {
-    const connection = await mysqlPool.getConnection();
+    // Obtener una conexión del pool
+    connection = await mysqlPool.getConnection();
 
-    // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
-    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
-
-    if (!usuarioResults.length) {
-      connection.release();
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-
-    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
-
-    // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
-    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
-
-    if (!personaResults.length) {
-      connection.release();
-      return res.status(404).json({ error: 'Persona no encontrada' });
-    }
-
-    const ID_PERSONA = personaResults[0].ID_PERSONA;
-
-    // Obtener todas las reservas para ese ID_PERSONA
+    // Consulta SQL
     const query = `
-SELECT 
-  p.NOMBRE_PERSONA, 
-  i.NOMBRE_INSTALACION, 
-  e.DESCRIPCION, 
-  CONVERT_TZ(r.HORA_FECHA, '+00:00', '-06:00') AS HORA_FECHA,
-  r.TIPO_EVENTO
-  FROM 
-  TBL_RESERVAS r
-  INNER JOIN 
-  TBL_PERSONAS p ON r.ID_PERSONA = p.ID_PERSONA
-  INNER JOIN 
-  TBL_INSTALACIONES i ON r.ID_INSTALACION = i.ID_INSTALACION
-  INNER JOIN 
-  TBL_ESTADO_RESERVA e ON r.ID_ESTADO_RESERVA = e.ID_ESTADO_RESERVA
-  WHERE 
-  r.ID_PERSONA = ? AND 
-    r.HORA_FECHA >= CURDATE()
-    ORDER BY 
-    r.HORA_FECHA ASC;
-  `;
-    const [reservasResults] = await connection.query(query, [ID_PERSONA]);
-    connection.release();
+      SELECT 
+          r.ID_RESERVA, 
+          r.ID_PERSONA, 
+          i.NOMBRE_INSTALACION, 
+          e.DESCRIPCION AS ESTADO_RESERVA, 
+          r.TIPO_EVENTO, 
+          r.HORA_FECHA
+      FROM 
+          TBL_RESERVAS r
+      JOIN 
+          TBL_INSTALACIONES i ON r.ID_INSTALACION = i.ID_INSTALACION
+      JOIN 
+          TBL_ESTADO_RESERVA e ON r.ID_ESTADO_RESERVA = e.ID_ESTADO_RESERVA
+      WHERE 
+          r.HORA_FECHA >= CURDATE()
+      ORDER BY 
+          r.HORA_FECHA ASC;
+    `;
 
-    res.json(reservasResults);
-  } catch (error) {
-    console.error('Error al obtener las reservas:', error);
-    res.status(500).json({ error: 'Error al obtener las reservas' });
+    // Ejecutar la consulta
+    const [results] = await connection.query(query);
+
+    // Retornar los resultados a la aplicación Flutter
+    res.json(results);
+  } catch (err) {
+    console.error('Error al ejecutar la consulta:', err);
+    res.status(500).send('Error en el servidor');
+  } finally {
+    if (connection) {
+      // Liberar la conexión de vuelta al pool
+      connection.release();
+    }
   }
 });
-
 
 
 //********** Consultar Visitas *********
