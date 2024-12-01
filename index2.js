@@ -1,5 +1,4 @@
 
-
 const nodemailer = require('nodemailer');
 const mysql = require('mysql2/promise'); // Usa mysql2/promise
 const express = require('express');
@@ -9,6 +8,11 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const moment = require('moment-timezone');
 const QRCode = require('qrcode');
+const multer = require('multer');
+
+// Configuración de Multer para almacenar temporalmente la imagen
+const storage = multer.memoryStorage(); // Usamos almacenamiento en memoria para obtener el buffer
+const upload = multer({ storage: storage });
 
 const SECRET_KEY = 'your_secret_key'; // Cambia esto por una clave secreta segura
 const app = express();
@@ -35,22 +39,53 @@ auth: {
 }
 });
 
-/*
-// SERVIDOR DE CORREO 
-const transporter = nodemailer.createTransport({
-  host: "smtp.hostinger.com",
-  port: 465,
-  auth: {
-    user: "villalasacacias@villalasacacias.com",
-    pass: "Dragonb@ll2"
-  }
-});
-*/
+
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// Ruta para subir la imagen
+// Ruta para subir la imagen
+app.post('/perfil/foto', upload.single('fotoPerfil'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).send('No se proporcionó imagen');
+  }
+
+  const imageBuffer = req.file.buffer;
+  const userId = req.body.usuario_id;
+
+  const query = 'UPDATE TBL_MS_USUARIO SET FOTO_PERFIL = ? WHERE ID_USUARIO = ?';
+  
+  try {
+    const [result] = await mysqlPool.query(query, [imageBuffer, userId]);
+    res.status(200).send('Imagen guardada correctamente');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error al guardar la imagen');
+  }
+});
+
+// Ruta para obtener la imagen
+app.get('/perfil/foto/:usuario_id', async (req, res) => {
+  const userId = req.params.usuario_id;
+  const query = 'SELECT FOTO_PERFIL FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?';
+
+  try {
+    const [rows] = await mysqlPool.query(query, [userId]);
+    if (rows.length === 0) {
+      return res.status(404).send('Usuario no encontrado');
+    }
+    const imageBuffer = rows[0].FOTO_PERFIL;
+    const base64Image = imageBuffer.toString('base64');
+    res.json({ fotoPerfil: base64Image });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error al obtener la imagen');
+  }
+});
+
 
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
@@ -66,7 +101,7 @@ app.post('/login', async (req, res) => {
         connection.release(); // Liberar la conexión
 
         if (rows.length === 0) {
-            return res.status(404).send("Usuario no encontrado");
+            return res.status(401).send("Usuario no encontrado");
         }
 
         const user = rows[0];
@@ -987,48 +1022,64 @@ app.get('/perfil', async (req, res) => {
 
 
 //********** Consultar Reservaciones *********
-app.get('/consulta_reservaciones_futuras', async (req, res) => {
-  let connection;
+app.get('/consultar_reservaciones', async (req, res) => {
+  const usuarioId = req.query.usuario_id;
+
   try {
-    // Obtener una conexión del pool
-    connection = await mysqlPool.getConnection();
+    const connection = await mysqlPool.getConnection();
 
-    // Consulta SQL
-    const query = `
-      SELECT 
-          r.ID_RESERVA, 
-          r.ID_PERSONA, 
-          i.NOMBRE_INSTALACION, 
-          e.DESCRIPCION AS ESTADO_RESERVA, 
-          r.TIPO_EVENTO, 
-          r.HORA_FECHA
-      FROM 
-          TBL_RESERVAS r
-      JOIN 
-          TBL_INSTALACIONES i ON r.ID_INSTALACION = i.ID_INSTALACION
-      JOIN 
-          TBL_ESTADO_RESERVA e ON r.ID_ESTADO_RESERVA = e.ID_ESTADO_RESERVA
-      WHERE 
-          r.HORA_FECHA >= CURDATE()
-      ORDER BY 
-          r.HORA_FECHA ASC;
-    `;
+    // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
+    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
-    // Ejecutar la consulta
-    const [results] = await connection.query(query);
-
-    // Retornar los resultados a la aplicación Flutter
-    res.json(results);
-  } catch (err) {
-    console.error('Error al ejecutar la consulta:', err);
-    res.status(500).send('Error en el servidor');
-  } finally {
-    if (connection) {
-      // Liberar la conexión de vuelta al pool
+    if (!usuarioResults.length) {
       connection.release();
+      return res.status(404).json({ error: 'Usuario no encontrado' });
     }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
+    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+
+    if (!personaResults.length) {
+      connection.release();
+      return res.status(404).json({ error: 'Persona no encontrada' });
+    }
+
+    const ID_PERSONA = personaResults[0].ID_PERSONA;
+
+    // Obtener todas las reservas para ese ID_PERSONA
+    const query = `
+SELECT 
+  p.NOMBRE_PERSONA, 
+  i.NOMBRE_INSTALACION, 
+  e.DESCRIPCION, 
+  CONVERT_TZ(r.HORA_FECHA, '+00:00', '-06:00') AS HORA_FECHA,
+  r.TIPO_EVENTO
+  FROM 
+  TBL_RESERVAS r
+  INNER JOIN 
+  TBL_PERSONAS p ON r.ID_PERSONA = p.ID_PERSONA
+  INNER JOIN 
+  TBL_INSTALACIONES i ON r.ID_INSTALACION = i.ID_INSTALACION
+  INNER JOIN 
+  TBL_ESTADO_RESERVA e ON r.ID_ESTADO_RESERVA = e.ID_ESTADO_RESERVA
+  WHERE 
+  r.ID_PERSONA = ? AND 
+    r.HORA_FECHA >= CURDATE()
+    ORDER BY 
+    r.HORA_FECHA ASC;
+  `;
+    const [reservasResults] = await connection.query(query, [ID_PERSONA]);
+    connection.release();
+
+    res.json(reservasResults);
+  } catch (error) {
+    console.error('Error al obtener las reservas:', error);
+    res.status(500).json({ error: 'Error al obtener las reservas' });
   }
 });
+
 
 
 //********** Consultar Visitas *********
@@ -1305,8 +1356,10 @@ app.post('/nueva_reserva', async (req, res) => {
     }
 
     const ID_INSTALACION = instalacionResults[0].ID_INSTALACION;
+    
+    const horaFechaYMDHM = moment.tz(horaFecha, 'DD-MM-YYYY HH:mm', 'America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss');
 
-    const horaFechaYMDHM = moment(horaFecha, 'DD-MM-YYYY HH:mm').format('YYYY-MM-DD HH:mm:ss');
+   // const horaFechaYMDHM = moment(horaFecha, 'DD-MM-YYYY HH:mm').format('YYYY-MM-DD HH:mm:ss');
 
     // Determinar el día de la semana
     const diaSemana = new Date(horaFechaYMDHM).getDay();
@@ -1361,9 +1414,11 @@ app.post('/nueva_reserva', async (req, res) => {
       'INSERT INTO TBL_RESERVAS (ID_PERSONA, ID_INSTALACION, ID_ESTADO_RESERVA, TIPO_EVENTO, HORA_FECHA) VALUES (?, ?, 3, ?, ?)',
       [ID_PERSONA, ID_INSTALACION, tipoEvento, horaFechaYMDHM]
     );
+    //pasar de formato la fecha de la reservación
+    const horaFechaDMAHMS = moment(horaFechaYMDHM).format('DD-MM-YYYY HH:mm');
 
     // Obtener los correos de los administradores
-    const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1');
+    const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 4');
 
     const emailList = adminEmails.map(row => row.EMAIL);
     const mailOptions = {
@@ -1379,7 +1434,7 @@ app.post('/nueva_reserva', async (req, res) => {
         <p><strong>Condominio:</strong> ${P_CONDOMINIO}</p>
         <p><strong>Instalación:</strong> ${nombreInstalacion}</p>
         <p><strong>Tipo de Evento:</strong> ${tipoEvento}</p>
-        <p><strong>Fecha y Hora:</strong> ${horaFechaYMDHM}</p>
+        <p><strong>Fecha y Hora:</strong> ${horaFechaDMAHMS}</p>
         <p>Les solicitamos brindar el apoyo necesario para que la nueva reservación se ejecute de manera adecuada.</p>
         <p>Atentamente,</p>
         <p>El equipo de administración de Villa Las Acacias</p>
@@ -1608,7 +1663,7 @@ app.post('/nueva_persona', async (req, res) => {
 
       // Enviar correo si es el primer administrador
       if (isAdminRequired) {
-          const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 1');
+          const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 4');
 
           const emailList = adminEmails.map(row => row.EMAIL);
           const mailOptions = {
@@ -1779,16 +1834,15 @@ app.post('/rechazar', async (req, res) => {
 
   console.log('Datos recibidos en /rechazar:', req.body);
 
-  // Iniciar una conexión de transacción
   const connection = await mysqlPool.getConnection();
-  
+
   try {
       // Iniciar la transacción
       await connection.beginTransaction();
 
-      // Obtener el NOMBRE_USUARIO asociado al ID_USUARIO
+      // Obtener el NOMBRE_USUARIO y EMAIL asociado al ID_USUARIO
       const [userResult] = await connection.query(
-          'SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?',
+          'SELECT NOMBRE_USUARIO, EMAIL FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?',
           [idUsuario]
       );
 
@@ -1796,26 +1850,49 @@ app.post('/rechazar', async (req, res) => {
           return res.status(404).json({ error: 'Usuario no encontrado' });
       }
 
-      const nombreUsuario = userResult[0].NOMBRE_USUARIO;
+      const { NOMBRE_USUARIO: nombreUsuario, EMAIL: email } = userResult[0];
 
       // Eliminar el registro de TBL_PERSONAS basado en el NOMBRE_USUARIO
-      const [deletePerson] = await connection.query(
+      await connection.query(
           'DELETE FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?',
           [nombreUsuario]
       );
 
       // Eliminar el registro de TBL_MS_USUARIO basado en el ID_USUARIO
-      const [deleteUser] = await connection.query(
+      await connection.query(
           'DELETE FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?',
           [idUsuario]
       );
 
-      // Si ambas eliminaciones se realizaron correctamente, confirmar la transacción
+      // Confirmar la transacción
       await connection.commit();
 
-      res.status(200).send('Solicitud rechazada correctamente');
+      // Configurar el correo electrónico
+      const mailOptions = {
+          from: 'villalasacacias@villalasacacias.com',
+          to: email,
+          subject: 'Solicitud Rechazada',
+          html: `
+              <p>Estimad@ ${nombreUsuario},</p>
+              <p>Lamentamos informarle que su solicitud ha sido rechazada en Villa Las Acacias.</p>
+              <p>Si tiene alguna pregunta o necesita más información, no dude en ponerse en contacto con la administración.</p>
+              <p>Atentamente,</p>
+              <p>El equipo de administración de Villa Las Acacias</p>
+          `
+      };
+
+      // Enviar el correo
+      transporter.sendMail(mailOptions, (err) => {
+          if (err) {
+              console.error('Error al enviar el correo:', err);
+              return res.status(500).json({ error: 'Error al enviar el correo' });
+          }
+          console.log('Correo enviado a:', email);
+      });
+
+      res.status(200).send('Solicitud rechazada y correo enviado correctamente');
   } catch (err) {
-      // En caso de error, revertir los cambios
+      // Revertir los cambios en caso de error
       await connection.rollback();
       console.error('Error al rechazar la solicitud:', err);
       res.status(500).send('Error al rechazar la solicitud');
@@ -1824,6 +1901,7 @@ app.post('/rechazar', async (req, res) => {
       connection.release();
   }
 });
+
 
 //Confirmar las visitas del QR
 app.post('/confirmar_visita', async (req, res) => {
@@ -1877,3 +1955,4 @@ app.post('/confirmar_visita', async (req, res) => {
       return res.status(500).json({ error: 'Error al procesar la solicitud' });
   }
 });
+
