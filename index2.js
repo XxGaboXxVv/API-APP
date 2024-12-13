@@ -8,11 +8,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const moment = require('moment-timezone');
 const QRCode = require('qrcode');
-const multer = require('multer');
 
-// Configuración de Multer para almacenar temporalmente la imagen
-const storage = multer.memoryStorage(); // Usamos almacenamiento en memoria para obtener el buffer
-const upload = multer({ storage: storage });
 
 const SECRET_KEY = 'your_secret_key'; // Cambia esto por una clave secreta segura
 const app = express();
