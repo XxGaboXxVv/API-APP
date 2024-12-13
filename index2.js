@@ -1,3 +1,4 @@
+
 const nodemailer = require('nodemailer');
 const mysql = require('mysql2/promise'); // Usa mysql2/promise
 const express = require('express');
@@ -7,6 +8,11 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const moment = require('moment-timezone');
 const QRCode = require('qrcode');
+const multer = require('multer');
+
+// Configuración de Multer para almacenar temporalmente la imagen
+const storage = multer.memoryStorage(); // Usamos almacenamiento en memoria para obtener el buffer
+const upload = multer({ storage: storage });
 
 const SECRET_KEY = 'your_secret_key'; // Cambia esto por una clave secreta segura
 const app = express();
@@ -18,6 +24,9 @@ const mysqlPool = mysql.createPool({
   password:'CodeM@sters123',
   database:'u995289331_railway',
   port:3306,
+  waitForPools: true,
+  PoolLimit: 0, // Ajusta según el rendimiento y necesidades
+  queueLimit: 0
 });
 
 // SERVIDOR DE CORREO 
@@ -30,11 +39,52 @@ auth: {
 }
 });
 
+
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
+// Ruta para subir la imagen
+// Ruta para subir la imagen
+app.post('/perfil/foto', upload.single('fotoPerfil'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).send('No se proporcionó imagen');
+  }
+
+  const imageBuffer = req.file.buffer;
+  const userId = req.body.usuario_id;
+
+  const query = 'UPDATE TBL_MS_USUARIO SET FOTO_PERFIL = ? WHERE ID_USUARIO = ?';
+  
+  try {
+    const [result] = await mysqlPool.query(query, [imageBuffer, userId]);
+    res.status(200).send('Imagen guardada correctamente');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error al guardar la imagen');
+  }
+});
+
+// Ruta para obtener la imagen
+app.get('/perfil/foto/:usuario_id', async (req, res) => {
+  const userId = req.params.usuario_id;
+  const query = 'SELECT FOTO_PERFIL FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?';
+
+  try {
+    const [rows] = await mysqlPool.query(query, [userId]);
+    if (rows.length === 0) {
+      return res.status(404).send('Usuario no encontrado');
+    }
+    const imageBuffer = rows[0].FOTO_PERFIL;
+    const base64Image = imageBuffer.toString('base64');
+    res.json({ fotoPerfil: base64Image });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error al obtener la imagen');
+  }
+});
 
 
 app.post('/login', async (req, res) => {
@@ -754,7 +804,7 @@ app.post('/registrar_visitas', async (req, res) => {
 
     const ID_PERSONA = personaResults[0].ID_PERSONA;
 
-    // Obtener el valor del parámetro con ID_PARAMETRO = 3
+    // Obtener el valor del parámetro con ID_PARAMETRO = QR_VENCIMIENTO
     const [parametroResults] = await connection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = "QR_VENCIMIENTO"');
 
     if (parametroResults.length === 0) {
@@ -829,6 +879,7 @@ app.post('/registrar_visitas', async (req, res) => {
       };
     } else {
       qrData = {
+        ID_VISITANTE,
         Residente: personaInfo.NOMBRE_PERSONA,
         DNI_Residente: personaInfo.DNI_PERSONA,
         Contacto: personaInfo.CONTACTO,
@@ -848,9 +899,6 @@ app.post('/registrar_visitas', async (req, res) => {
       });
     });
 
-    const insertQRQuery = 'INSERT INTO TBL_QR (ID_VISITANTE, QR_CODE, FECHA_VENCIMIENTO) VALUES (?, ?, ?)';
-    await connection.query(insertQRQuery, [ID_VISITANTE, qrUrl, isRecurrentVisitor ? fechaVencimiento : fechaCalculada]);
-
     connection.release();
 
     res.status(201).json({
@@ -863,35 +911,101 @@ app.post('/registrar_visitas', async (req, res) => {
   }
 });
 
-//validar QR
-
+//Validar el QR por los eventos 
 app.post('/validateQR', async (req, res) => {
-  const { qrCode } = req.body;
+  // Desestructurar el ID_VISITANTE del cuerpo
+  const { ID_VISITANTE } = req.body;
+
+  // Validar que el ID_VISITANTE esté presente
+  if (!ID_VISITANTE) {
+    return res.status(400).json({ message: 'ID de visitante no proporcionado' });
+  }
 
   try {
     const connection = await mysqlPool.getConnection();
 
-    // Consultar el código QR
-    const [results] = await connection.query('SELECT * FROM TBL_QR WHERE QR_CODE = ?', [qrCode]);
+    // Verificar si el visitante existe en la base de datos
+    const [visitanteResults] = await connection.query(
+      'SELECT ESTADO_QR FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?',
+      [ID_VISITANTE]
+    );
 
-    if (results.length === 0) {
+    if (visitanteResults.length === 0) {
       connection.release();
-      return res.status(404).json({ message: 'Código QR no encontrado' });
+      return res.status(404).json({ message: 'ID de visitante no encontrado' });
     }
 
-    const qrInfo = results[0];
-    const fechaActual = moment().tz('America/Tegucigalpa').format('YYYY-MM-DD HH:mm:ss');
+    const estadoQR = visitanteResults[0].ESTADO_QR;
 
-    if (fechaActual > qrInfo.FECHA_VENCIMIENTO) {
+    // Obtener el parámetro QR_EVENTOS
+    const [parametroResults] = await connection.query(
+      "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = 'QR_EVENTOS'"
+    );
+
+    if (parametroResults.length === 0) {
       connection.release();
-      return res.status(400).json({ message: 'Código QR expirado' });
+      return res.status(500).json({ message: 'Parámetro QR_EVENTOS no configurado' });
     }
 
+    const valorQREventos = parametroResults[0].VALOR;
+
+    // Validar si el código QR ya fue escaneado
+    if (estadoQR == valorQREventos) {
+      connection.release();
+      return res.status(400).json({ message: 'Código QR ya escaneado' });
+    }
+
+    // Respuesta exitosa
     connection.release();
-    res.status(200).json({ message: 'Código QR válido', qrInfo });
+    return res.status(200).json({ message: 'Código QR válido' });
   } catch (error) {
     console.error('Error al validar el código QR:', error);
-    res.status(500).json({ message: 'Error al validar el código QR' });
+    return res.status(500).json({ message: 'Error interno al validar el código QR' });
+  }
+});
+
+
+
+//Incrementar el estado del qr 
+app.post('/incrementarEstadoQR', async (req, res) => {
+  const {ID_VISITANTE} = req.body;
+
+    if (!ID_VISITANTE) {
+      console.error('Datos recibidos:');
+    return res.status(400).json({ message: 'ID de visitante no proporcionado' });
+    
+  }
+  try {
+    // Obtener una conexión del pool
+    const connection = await mysqlPool.getConnection();
+
+    // Consultar el estado del QR en TBL_REGVISITAS
+    const [visitanteResults] = await connection.query(
+      'SELECT ESTADO_QR FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?',
+      [ID_VISITANTE]
+    );
+
+    if (visitanteResults.length === 0) {
+      connection.release();
+      return res.status(404).json({ error: 'Visitante no encontrado' });
+    }
+
+    const estadoQR = visitanteResults[0].ESTADO_QR;
+
+    // Incrementar el estado del QR
+    const nuevoEstadoQR = estadoQR + 1;
+    await connection.query(
+      'UPDATE TBL_REGVISITAS SET ESTADO_QR = ? WHERE ID_VISITANTE = ?',
+      [nuevoEstadoQR, ID_VISITANTE]
+    );
+
+    // Liberar la conexión
+    connection.release();
+
+    return res.status(200).json({ message: 'Estado QR incrementado exitosamente'});
+  } catch (error) {
+    console.error('Error al incrementar el estado del QR:', error);
+    return res.status(500).json({ error: 'Error al procesar la solicitud' });
   }
 });
 
@@ -1004,7 +1118,7 @@ SELECT
   p.NOMBRE_PERSONA, 
   i.NOMBRE_INSTALACION, 
   e.DESCRIPCION, 
-  r.HORA_FECHA,
+  CONVERT_TZ(r.HORA_FECHA, '+00:00', '-06:00') AS HORA_FECHA,
   r.TIPO_EVENTO
   FROM 
   TBL_RESERVAS r
@@ -1108,7 +1222,7 @@ app.get('/consulta_reservaciones_futuras', async (req, res) => {
           i.NOMBRE_INSTALACION, 
           e.DESCRIPCION AS ESTADO_RESERVA, 
           r.TIPO_EVENTO, 
-         r.HORA_FECHA
+          CONVERT_TZ(r.HORA_FECHA, '+00:00', '-06:00') AS HORA_FECHA
       FROM 
           TBL_RESERVAS r
       JOIN 
@@ -1368,7 +1482,7 @@ app.post('/nueva_reserva', async (req, res) => {
     const horaFechaDMAHMS = moment(horaFechaYMDHM).format('DD-MM-YYYY HH:mm');
 
     // Obtener los correos de los administradores
-    const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)');
+    const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL = 4');
 
     const emailList = adminEmails.map(row => row.EMAIL);
     const mailOptions = {
@@ -1519,133 +1633,151 @@ app.post('/nueva_persona', async (req, res) => {
   const { usuarioId, P_DNI, P_TIPO_CONTACTO, P_CONTACTO, P_PARENTESCO, P_CONDOMINIO } = req.body;
 
   if (!usuarioId || !P_DNI || !P_TIPO_CONTACTO || !P_CONTACTO || !P_PARENTESCO || !P_CONDOMINIO) {
-      return res.status(400).json({ error: 'Todos los campos son requeridos' });
+    return res.status(400).json({ error: 'Todos los campos son requeridos' });
   }
 
   try {
-      const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+    const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
 
-      // Obtener el nombre de usuario
-      const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
-
-      if (usuarioResults.length === 0) {
-          connection.release(); // Liberar la conexión
-          return res.status(404).json({ error: 'Usuario no encontrado' });
-      }
-
-      const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
-
-      // Obtener el ID_PERSONA usando el nombreUsuario
-      const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
-
-      if (personaResults.length === 0) {
-          connection.release(); // Liberar la conexión
-          return res.status(404).json({ error: 'Persona no encontrada' });
-      }
-
-      const ID_PERSONA = personaResults[0].ID_PERSONA;
-
-      // Verificar si el condominio existe
-      const [condominioResults] = await connection.query('SELECT ID_CONDOMINIO FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO]);
-
-      if (condominioResults.length === 0) {
-          connection.release(); // Liberar la conexión
-          return res.status(404).json({ error: 'Condominio no encontrado' });
-      }
-
-      const ID_CONDOMINIO = condominioResults[0].ID_CONDOMINIO;
-
-      // Verificar si hay un administrador para este condominio
-      const [adminResults] = await connection.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO]);
-
-      const adminCount = adminResults[0].adminCount;
-      const isAdminRequired = adminCount === 0; // Si no hay administrador, se debe insertar 1 en ID_PADRE
-
-      // Obtener el ID_TIPO_CONTACTO
-      const [tipoContactoResults] = await connection.query('SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?', [P_TIPO_CONTACTO]);
-
-      // Obtener el ID_PARENTESCO
-      const [parentescoResults] = await connection.query('SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?', [P_PARENTESCO]);
-
-      if (!tipoContactoResults.length || !parentescoResults.length) {
-          connection.release(); // Liberar la conexión
-          return res.status(405).json({ error: 'Datos no encontrados' });
-      }
-
-      const ID_TIPO_CONTACTO = tipoContactoResults[0].ID_TIPO_CONTACTO;
-      const ID_PARENTESCO = parentescoResults[0].ID_PARENTESCO;
-
-      // Insertar contacto
-      const [contactoResults] = await connection.query('INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)', [ID_TIPO_CONTACTO, P_CONTACTO]);
-
-      const ID_CONTACTO = contactoResults.insertId;
-
-      // Construir consulta de actualización de persona
-      let updatePersonaQuery;
-      const queryParams = [P_DNI, ID_CONTACTO, 1, ID_PARENTESCO, ID_CONDOMINIO, ID_PERSONA];
-
-      if (isAdminRequired) {
-          updatePersonaQuery = `
-              UPDATE TBL_PERSONAS
-              SET DNI_PERSONA = ?, ID_CONTACTO = ?,
-              ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?,
-              ID_CONDOMINIO = ?, ID_PADRE = 1
-              WHERE ID_PERSONA = ?
-          `;
-      } else {
-          updatePersonaQuery = `
-              UPDATE TBL_PERSONAS 
-              SET DNI_PERSONA = ?, ID_CONTACTO = ?, 
-              ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?, 
-              ID_CONDOMINIO = ?, ID_PADRE = NULL
-              WHERE ID_PERSONA = ?
-          `;
-      }
-
-      await connection.query(updatePersonaQuery, queryParams);
-
-      // Actualizar PRIMER_INGRESO_COMPLETADO a 1 en TBL_MS_USUARIO
-      await connection.query('UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?', [usuarioId]);
-
+    // Verificar si el condominio existe y obtener ID_CONDOMINIO y USUARIOS_POR_CASA
+    const [condominioResults] = await connection.query('SELECT ID_CONDOMINIO, USUARIOS_POR_CASA FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO]);
+console.error(condominioResults);
+    if (condominioResults.length === 0) {
       connection.release(); // Liberar la conexión
+      return res.status(404).json({ error: 'Condominio no encontrado' });
+    }
 
-      console.log('ID_PERSONA actualizado:', ID_PERSONA);
+    const ID_CONDOMINIO = condominioResults[0].ID_CONDOMINIO;
+    const usuariosPorCasa = condominioResults[0].USUARIOS_POR_CASA;
 
-      // Enviar correo si es el primer administrador
-      if (isAdminRequired) {
-          const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)');
+    // Obtener el número de usuarios registrados en el condominio
+    const [usuariosRegistradosResults] = await connection.query('SELECT COUNT(*) AS totalUsuarios FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ?', [ID_CONDOMINIO]);
+    
+    console.error(usuariosRegistradosResults);
 
-          const emailList = adminEmails.map(row => row.EMAIL);
-          const mailOptions = {
-                      from: 'villalasacacias@villalasacacias.com',
-                      to: emailList,
-                      subject: 'Registro de Nuevo Administrador de Condominio',
-                      html: `
-                        <p>Estimados Administradores,</p>
-                        <p>Nos complace informarles que se ha registrado un nuevo administrador para el siguiente condominio:</p>
-                        <p><strong>Nombre:</strong> ${nombreUsuario}</p>
-                        <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
-                        <p><strong>Condominio:</strong> ${P_CONDOMINIO}</p>
-                        <p>Les solicitamos brindar el apoyo necesario para que el nuevo administrador se integre de manera adecuada en sus funciones.</p>
-                        <p>Atentamente,</p>
-                        <p>El equipo de administración de Villa Las Acacias</p>
-                      `
-                    };
-          transporter.sendMail(mailOptions, (err) => {
-              if (err) {
-                  console.error('Error al enviar el correo:', err);
-                  return res.status(500).json({ error: 'Error al enviar el correo' });
-              }
-              console.log('Correo enviado a:', emailList);
-          });
-      }
+    const totalUsuariosRegistrados = usuariosRegistradosResults[0].totalUsuarios;
 
-      res.status(201).json({ success: true, message: 'Persona actualizada correctamente y PRIMER_INGRESO_COMPLETADO establecido en 1' });
+    console.error(totalUsuariosRegistrados);
+
+    // Verificar si la cantidad de usuarios registrados es menor o igual a USUARIOS_POR_CASA
+    if (totalUsuariosRegistrados >= usuariosPorCasa) {
+      console.error('TOTAL TOTAL');
+      connection.release(); // Liberar la conexión
+      return res.status(400).json({ error: 'Cantidad máxima de usuarios ya registrados' });
+    }
+    
+    // Obtener el nombre de usuario
+    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
+
+    if (usuarioResults.length === 0) {
+      connection.release(); // Liberar la conexión
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    // Obtener el ID_PERSONA usando el nombreUsuario
+    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+
+    if (personaResults.length === 0) {
+      connection.release(); // Liberar la conexión
+      return res.status(404).json({ error: 'Persona no encontrada' });
+    }
+
+    const ID_PERSONA = personaResults[0].ID_PERSONA;
+
+    // Verificar si hay un administrador para este condominio
+    const [adminResults] = await connection.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO]);
+
+    const adminCount = adminResults[0].adminCount;
+    const isAdminRequired = adminCount === 0; // Si no hay administrador, se debe insertar 1 en ID_PADRE
+
+    // Obtener el ID_TIPO_CONTACTO
+    const [tipoContactoResults] = await connection.query('SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?', [P_TIPO_CONTACTO]);
+
+    // Obtener el ID_PARENTESCO
+    const [parentescoResults] = await connection.query('SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?', [P_PARENTESCO]);
+
+    if (!tipoContactoResults.length || !parentescoResults.length) {
+      connection.release(); // Liberar la conexión
+      return res.status(405).json({ error: 'Datos no encontrados' });
+    }
+
+    const ID_TIPO_CONTACTO = tipoContactoResults[0].ID_TIPO_CONTACTO;
+    const ID_PARENTESCO = parentescoResults[0].ID_PARENTESCO;
+
+    // Insertar contacto
+    const [contactoResults] = await connection.query('INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)', [ID_TIPO_CONTACTO, P_CONTACTO]);
+
+    const ID_CONTACTO = contactoResults.insertId;
+
+    // Construir consulta de actualización de persona
+    let updatePersonaQuery;
+    const queryParams = [P_DNI, ID_CONTACTO, 1, ID_PARENTESCO, ID_CONDOMINIO, ID_PERSONA];
+
+    if (isAdminRequired) {
+      updatePersonaQuery = `
+        UPDATE TBL_PERSONAS
+        SET DNI_PERSONA = ?, ID_CONTACTO = ?,
+        ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?,
+        ID_CONDOMINIO = ?, ID_PADRE = 1
+        WHERE ID_PERSONA = ?
+      `;
+    } else {
+      updatePersonaQuery = `
+        UPDATE TBL_PERSONAS 
+        SET DNI_PERSONA = ?, ID_CONTACTO = ?, 
+        ID_ESTADO_PERSONA = ?, ID_PARENTESCO = ?, 
+        ID_CONDOMINIO = ?, ID_PADRE = NULL
+        WHERE ID_PERSONA = ?
+      `;
+    }
+
+    await connection.query(updatePersonaQuery, queryParams);
+
+    // Actualizar PRIMER_INGRESO_COMPLETADO a 1 en TBL_MS_USUARIO
+    await connection.query('UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?', [usuarioId]);
+
+    connection.release(); // Liberar la conexión
+
+    console.log('ID_PERSONA actualizado:', ID_PERSONA);
+
+    // Enviar correo si es el primer administrador
+    if (isAdminRequired) {
+      const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)');
+
+      const emailList = adminEmails.map(row => row.EMAIL);
+      const mailOptions = {
+        from: 'villalasacacias@villalasacacias.com',
+        to: emailList,
+        subject: 'Registro de Nuevo Administrador de Condominio',
+        html: `
+          <p>Estimados Administradores,</p>
+          <p>Nos complace informarles que se ha registrado un nuevo administrador para el siguiente condominio:</p>
+          <p><strong>Nombre:</strong> ${nombreUsuario}</p>
+          <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
+          <p><strong>Condominio:</strong> ${P_CONDOMINIO}</p>
+          <p>Les solicitamos brindar el apoyo necesario para que el nuevo administrador se integre de manera adecuada en sus funciones.</p>
+          <p>Atentamente,</p>
+          <p>El equipo de administración de Villa Las Acacias</p>
+        `
+      };
+      transporter.sendMail(mailOptions, (err) => {
+        if (err) {
+          console.error('Error al enviar el correo:', err);
+          return res.status(500).json({ error: 'Error al enviar el correo' });
+        }
+        console.log('Correo enviado a:', emailList);
+      });
+    }
+
+    res.status(201).json({ success: true, message: 'Persona actualizada correctamente y PRIMER_INGRESO_COMPLETADO establecido en 1' });
   } catch (err) {
-      console.error('Error al procesar la solicitud:', err);
-      res.status(500).json({ error: 'Error al procesar la solicitud' });
+    console.error('Error al procesar la solicitud:', err);
+    res.status(500).json({ error: 'Error al procesar la solicitud' });
   }
 });
+
 
 
 //********** Actualizar lo PRIMER_INGRESO_COMPLETADO ********
@@ -1906,3 +2038,84 @@ app.post('/confirmar_visita', async (req, res) => {
   }
 });
 
+// Ruta para enviar correos del comportamiento de los visitantes
+app.post('/notificarMotivo', async (req, res) => {
+  const {
+    nombreResidente,
+    dniResidente,
+    contacto,
+    condominio,
+    nombreVisitante,
+    dniVisitante,
+    numeroPersonas,
+    motivo,
+  } = req.body;
+
+  try {
+    // Obtener correos de administradores con ID_ROL en (1, 4)
+    const [adminEmailsResult] = await mysqlPool.query(
+      'SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)'
+    );
+    const adminEmails = adminEmailsResult.map((row) => row.EMAIL);
+
+    // Obtener el correo del residente por nombre
+    const [residentEmailResult] = await mysqlPool.query(
+      'SELECT EMAIL FROM TBL_MS_USUARIO WHERE NOMBRE_USUARIO = ?',
+      [nombreResidente]
+    );
+    const fechaActual = moment.tz('America/Tegucigalpa').format('DD-MM-YYYY HH:mm');
+
+    const residentEmail = residentEmailResult.length
+      ? residentEmailResult[0].EMAIL
+      : null;
+
+    if (!residentEmail) {
+      return res.status(404).json({ error: 'No se encontró el correo del residente' });
+    }
+
+    // Crear el contenido del correo
+    const emailContent = `
+      <p>Estimados Administradores y Residente,</p>
+      <p>Por este medio les notificamos sobre un incidente relacionado con el comportamiento de una visita:</p>
+      <p><strong>Motivo:</strong> ${motivo}</p>
+      <p><strong>Fecha y hora:</strong> ${fechaActual}</p>
+      <p><strong>Detalles del Visitante:</strong></p>
+      <ul>
+        <li><strong>Nombre:</strong> ${nombreVisitante}</li>
+        <li><strong>DNI:</strong> ${dniVisitante}</li>
+        <li><strong>Número de personas:</strong> ${numeroPersonas}</li>
+      </ul>
+      <p><strong>Detalles del Residente Asociado:</strong></p>
+      <ul>
+        <li><strong>Nombre:</strong> ${nombreResidente}</li>
+        <li><strong>DNI:</strong> ${dniResidente}</li>
+        <li><strong>Contacto:</strong> ${contacto}</li>
+        <li><strong>Condominio:</strong> ${condominio}</li>
+      </ul>
+      <p>Les solicitamos su colaboración para resolver esta situación y tomar las medidas necesarias para evitar incidentes futuros.</p>
+      <p>Atentamente,</p>
+      <p>El equipo de administración de Villa Las Acacias</p>
+    `;
+
+    // Opciones de envío
+    const mailOptions = {
+      from: 'villalasacacias@villalasacacias.com',
+      to: [...adminEmails, residentEmail],
+      subject: 'Comportamiento de Visita',
+      html: emailContent,
+    };
+
+    // Enviar el correo
+    transporter.sendMail(mailOptions, (err) => {
+      if (err) {
+        console.error('Error al enviar el correo:', err);
+        return res.status(500).json({ error: 'Error al enviar el correo' });
+      }
+      console.log('Correo enviado a:', [...adminEmails, residentEmail]);
+      res.status(200).json({ message: 'Correo enviado exitosamente' });
+    });
+  } catch (error) {
+    console.error('Error al procesar la solicitud:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
