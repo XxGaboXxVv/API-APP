@@ -14,7 +14,7 @@ const SECRET_KEY = 'your_secret_key'; // Cambia esto por una clave secreta segur
 const app = express();
 app.use(bp.json());
 
-const pool = mysql.createPool({
+const mysqlPool = mysql.createPool({
     host:'82.197.82.66',
     user:'u995289331_root',
     password:'CodeM@sters123',
