@@ -126,7 +126,7 @@ app.post('/login', async (req, res) => {
                     );
 
                     const mailOptions = {
-                      from: 'villaslasacacias@villalasacacias.com',
+                      from: 'villalasacacias@villalasacacias.com',
                       to: username,
                       subject: 'Código de Verificación 2FA',
                       html: `
