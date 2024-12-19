@@ -28,7 +28,7 @@ const transporter = nodemailer.createTransport({
 host: "smtp.hostinger.com",
 port: 465,
 auth: {
-  user: "villaslasacacias@villalasacacias.com",
+  user: "villalasacacias@villalasacacias.com",
   pass: "Villalasacacias123@"
 }
 });
