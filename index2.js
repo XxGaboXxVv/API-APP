@@ -1170,7 +1170,7 @@ app.get('/consulta_reservaciones_futuras', async (req, res) => {
     // Obtener una conexión del pool
     connection = await mysqlPool.getConnection();
 
-    // Consulta SQL
+    // Consulta SQL 
     const query = `
       SELECT 
           r.ID_RESERVA, 
