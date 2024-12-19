@@ -29,7 +29,7 @@ host: "smtp.hostinger.com",
 port: 465,
 auth: {
   user: "villaslasacacias@villalasacacias.com",
-  pass: "Villlasacacias123@"
+  pass: "Villalasacacias123@"
 }
 });
 
