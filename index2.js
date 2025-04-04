@@ -15,10 +15,10 @@ const app = express();
 app.use(bp.json());
 
 const mysqlPool = mysql.createPool({
-    host:'82.197.82.136',
-    user:'u260919439_codemasters',
+     host:'82.197.82.176',
+    user:'u171635367_codemasters',
     password:'CodeM@sters123',
-    database:'u260919439_railway',
+    database:'u171635367_las_acacias',
     port:3306,
     multipleStatements: true
 });
