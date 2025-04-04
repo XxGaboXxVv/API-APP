@@ -1805,7 +1805,7 @@ app.get('/solicitudes', async (req, res) => {
         // Verificar si el usuario es administrador (ID_PADRE debe ser 1)
         if (ID_PADRE !== 1) {
             connection.release(); // Liberar la conexión
-          return res.status(403).json({ message: 'No tienes los permisos para poder ingresarvvvvvvvv' });
+          return res.status(403).json({ message: 'No tienes los permisos para poder ingresar' });
         }
 
         // Obtener todos los nombres en ese ID_CONDOMINIO que tengan el estado pendiente (ID_ESTADO_USUARIO = 5)
