@@ -1584,92 +1584,132 @@ app.get('/condominio', async (req, res) => {
 });
 
 
-//********* NUEVA PERSONA*********
-app.post('/nueva_persona', async (req, res) => {
-  const { usuarioId, P_DNI, P_TIPO_CONTACTO, P_CONTACTO, P_PARENTESCO, P_CONDOMINIO } = req.body;
+//********* NUEVA PERSONA *********
+app.post("/nueva_persona", async (req, res) => {
+  const {
+    usuarioId,
+    P_DNI,
+    P_TIPO_CONTACTO,
+    P_CONTACTO,
+    P_PARENTESCO,
+    P_CONDOMINIO,
+  } = req.body;
 
-  if (!usuarioId || !P_DNI || !P_TIPO_CONTACTO || !P_CONTACTO || !P_PARENTESCO || !P_CONDOMINIO) {
-    return res.status(400).json({ error: 'Todos los campos son requeridos' });
+  if (
+    !usuarioId ||
+    !P_DNI ||
+    !P_TIPO_CONTACTO ||
+    !P_CONTACTO ||
+    !P_PARENTESCO ||
+    !P_CONDOMINIO
+  ) {
+    return res.status(400).json({ error: "Todos los campos son requeridos" });
   }
 
   try {
-    const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+    const connection = await mysqlPool.getConnection();
 
-    // Verificar si el condominio existe y obtener ID_CONDOMINIO y USUARIOS_POR_CASA
-    const [condominioResults] = await connection.query('SELECT ID_CONDOMINIO, USUARIOS_POR_CASA FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?', [P_CONDOMINIO]);
-console.error(condominioResults);
+    // Verificar si el condominio existe
+    const [condominioResults] = await connection.query(
+      "SELECT ID_CONDOMINIO, USUARIOS_POR_CASA FROM TBL_CONDOMINIOS WHERE DESCRIPCION = ?",
+      [P_CONDOMINIO]
+    );
+
     if (condominioResults.length === 0) {
-      connection.release(); // Liberar la conexión
-      return res.status(404).json({ error: 'Condominio no encontrado' });
+      connection.release();
+      return res.status(404).json({ error: "Condominio no encontrado" });
     }
 
     const ID_CONDOMINIO = condominioResults[0].ID_CONDOMINIO;
     const usuariosPorCasa = condominioResults[0].USUARIOS_POR_CASA;
 
-    // Obtener el número de usuarios registrados en el condominio
-    const [usuariosRegistradosResults] = await connection.query('SELECT COUNT(*) AS totalUsuarios FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ?', [ID_CONDOMINIO]);
-    
-    console.error(usuariosRegistradosResults);
+    // Contar usuarios registrados en el condominio
+    const [usuariosRegistradosResults] = await connection.query(
+      "SELECT COUNT(*) AS totalUsuarios FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ?",
+      [ID_CONDOMINIO]
+    );
 
     const totalUsuariosRegistrados = usuariosRegistradosResults[0].totalUsuarios;
 
-    console.error(totalUsuariosRegistrados);
-
-    // Verificar si la cantidad de usuarios registrados es menor o igual a USUARIOS_POR_CASA
     if (totalUsuariosRegistrados >= usuariosPorCasa) {
-      console.error('TOTAL TOTAL');
-      connection.release(); // Liberar la conexión
-      return res.status(400).json({ error: 'Cantidad máxima de usuarios ya registrados' });
+      connection.release();
+      return res
+        .status(400)
+        .json({ error: "Cantidad máxima de usuarios ya registrados" });
     }
-    
-    // Obtener el nombre de usuario
-    const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
+
+    // Obtener nombre del usuario
+    const [usuarioResults] = await connection.query(
+      "SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?",
+      [usuarioId]
+    );
 
     if (usuarioResults.length === 0) {
-      connection.release(); // Liberar la conexión
-      return res.status(404).json({ error: 'Usuario no encontrado' });
+      connection.release();
+      return res.status(404).json({ error: "Usuario no encontrado" });
     }
 
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
-    // Obtener el ID_PERSONA usando el nombreUsuario
-    const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
+    // Obtener ID_PERSONA por nombre de usuario
+    const [personaResults] = await connection.query(
+      "SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?",
+      [nombreUsuario]
+    );
 
     if (personaResults.length === 0) {
-      connection.release(); // Liberar la conexión
-      return res.status(404).json({ error: 'Persona no encontrada' });
+      connection.release();
+      return res.status(404).json({ error: "Persona no encontrada" });
     }
 
     const ID_PERSONA = personaResults[0].ID_PERSONA;
 
     // Verificar si hay un administrador para este condominio
-    const [adminResults] = await connection.query('SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1', [ID_CONDOMINIO]);
+    const [adminResults] = await connection.query(
+      "SELECT COUNT(*) AS adminCount FROM TBL_PERSONAS WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1",
+      [ID_CONDOMINIO]
+    );
 
     const adminCount = adminResults[0].adminCount;
-    const isAdminRequired = adminCount === 0; // Si no hay administrador, se debe insertar 1 en ID_PADRE
+    const isAdminRequired = adminCount === 0;
 
-    // Obtener el ID_TIPO_CONTACTO
-    const [tipoContactoResults] = await connection.query('SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?', [P_TIPO_CONTACTO]);
+    // Obtener ID_TIPO_CONTACTO y ID_PARENTESCO
+    const [tipoContactoResults] = await connection.query(
+      "SELECT ID_TIPO_CONTACTO FROM TBL_TIPO_CONTACTO WHERE DESCRIPCION = ?",
+      [P_TIPO_CONTACTO]
+    );
 
-    // Obtener el ID_PARENTESCO
-    const [parentescoResults] = await connection.query('SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?', [P_PARENTESCO]);
+    const [parentescoResults] = await connection.query(
+      "SELECT ID_PARENTESCO FROM TBL_PARENTESCOS WHERE DESCRIPCION = ?",
+      [P_PARENTESCO]
+    );
 
     if (!tipoContactoResults.length || !parentescoResults.length) {
-      connection.release(); // Liberar la conexión
-      return res.status(405).json({ error: 'Datos no encontrados' });
+      connection.release();
+      return res.status(405).json({ error: "Datos no encontrados" });
     }
 
     const ID_TIPO_CONTACTO = tipoContactoResults[0].ID_TIPO_CONTACTO;
     const ID_PARENTESCO = parentescoResults[0].ID_PARENTESCO;
 
-    // Insertar contacto
-    const [contactoResults] = await connection.query('INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)', [ID_TIPO_CONTACTO, P_CONTACTO]);
+    // Insertar nuevo contacto
+    const [contactoResults] = await connection.query(
+      "INSERT INTO TBL_CONTACTOS (ID_TIPO_CONTACTO, DESCRIPCION) VALUES (?, ?)",
+      [ID_TIPO_CONTACTO, P_CONTACTO]
+    );
 
     const ID_CONTACTO = contactoResults.insertId;
 
-    // Construir consulta de actualización de persona
+    // Armar consulta de actualización de persona
     let updatePersonaQuery;
-    const queryParams = [P_DNI, ID_CONTACTO, 1, ID_PARENTESCO, ID_CONDOMINIO, ID_PERSONA];
+    const queryParams = [
+      P_DNI,
+      ID_CONTACTO,
+      1,
+      ID_PARENTESCO,
+      ID_CONDOMINIO,
+      ID_PERSONA,
+    ];
 
     if (isAdminRequired) {
       updatePersonaQuery = `
@@ -1691,44 +1731,45 @@ console.error(condominioResults);
 
     await connection.query(updatePersonaQuery, queryParams);
 
-    // Actualizar PRIMER_INGRESO_COMPLETADO a 1 en TBL_MS_USUARIO
-    await connection.query('UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?', [usuarioId]);
+    // Marcar primer ingreso completado
+    await connection.query(
+      "UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?",
+      [usuarioId]
+    );
 
-    connection.release(); // Liberar la conexión
+    connection.release();
 
-    console.log('ID_PERSONA actualizado:', ID_PERSONA);
-
-    // Enviar correo si es el primer administrador
+    // Enviar correo si es el primer administrador del sistema
     if (isAdminRequired) {
-      const [adminEmails] = await mysqlPool.query('SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)');
+      const [adminEmails] = await mysqlPool.query(
+        "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)"
+      );
 
-      const emailList = adminEmails.map(row => row.EMAIL);
+      const emailList = adminEmails.map((row) => row.EMAIL);
       const mailOptions = {
-        from: 'villalasacacias@villalasacacias.com',
+        from: "villalasacacias@villalasacacias.com",
         to: emailList,
-        subject: 'Registro de Nuevo Administrador de Condominio',
+        subject: "Registro de Nuevo Administrador de Condominio",
         html: `
           <p>Estimados Administradores,</p>
-          <p>Nos complace informarles que se ha registrado un nuevo administrador para el siguiente condominio:</p>
+          <p>Se ha registrado un nuevo administrador para el condominio:</p>
           <p><strong>Nombre:</strong> ${nombreUsuario}</p>
           <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
           <p><strong>Condominio:</strong> ${P_CONDOMINIO}</p>
-          <p>Les solicitamos brindar el apoyo necesario para que el nuevo administrador se integre de manera adecuada en sus funciones.</p>
           <p>Atentamente,</p>
-          <p>El equipo de administración de Villa Las Acacias</p>
-        `
+          <p>Villa Las Acacias</p>
+        `,
       };
       transporter.sendMail(mailOptions, (err) => {
         if (err) {
-          console.error('Error al enviar el correo:', err);
-          return res.status(500).json({ error: 'Error al enviar el correo' });
+          console.error("Error al enviar el correo:", err);
+        } else {
+          console.log("Correo enviado a:", emailList);
         }
-        console.log('Correo enviado a:', emailList);
       });
     }
-        // ********* NUEVA LÓGICA: Notificar a administradores del condominio actual *********
 
-    // 1. Obtener nombres de administradores del condominio (ID_PADRE = 1)
+    // ********* NUEVA LÓGICA: Notificar a administradores del condominio *********
     const [adminPersonas] = await mysqlPool.query(
       `SELECT NOMBRE_PERSONA FROM TBL_PERSONAS 
        WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1`,
@@ -1738,7 +1779,6 @@ console.error(condominioResults);
     if (adminPersonas.length > 0) {
       const nombresAdmin = adminPersonas.map((p) => p.NOMBRE_PERSONA);
 
-      // 2. Buscar los correos de esos administradores en TBL_MS_USUARIO
       const [correosAdminCondominio] = await mysqlPool.query(
         `SELECT EMAIL FROM TBL_MS_USUARIO 
          WHERE NOMBRE_USUARIO IN (?)`,
@@ -1758,43 +1798,35 @@ console.error(condominioResults);
             <p><strong>Nombre:</strong> ${nombreUsuario}</p>
             <p><strong>DNI:</strong> ${P_DNI}</p>
             <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
-            <p>Por favor, tenga en cuenta este nuevo registro para futuras gestiones administrativas.</p>
-            <p>Atentamente,</p>
-            <p>Villa Las Acacias</p>
+            <p>Saludos cordiales,<br>Villa Las Acacias</p>
           `,
         };
 
         transporter.sendMail(mailOptionsAdmin, (err) => {
           if (err) {
-            console.error(
-              "Error al enviar correo a administradores del condominio:",
-              err
-            );
+            console.error("Error al enviar correo a administradores del condominio:", err);
           } else {
-            console.log(
-              "Correo enviado a administradores del condominio:",
-              correos
-            );
+            console.log("Correo enviado a administradores del condominio:", correos);
           }
         });
       } else {
-        console.warn(
-          "No se encontraron correos para los administradores del condominio."
-        );
+        console.warn("No se encontraron correos de administradores del condominio.");
       }
     } else {
       console.warn("No hay administradores registrados en el condominio.");
     }
-    //Fin de enviar los correo a los administradores de los condominios  
+    // *************************************************************************
 
-    res.status(201).json({ success: true, message: 'Persona actualizada correctamente y PRIMER_INGRESO_COMPLETADO establecido en 1' });
+    res.status(201).json({
+      success: true,
+      message:
+        "Persona actualizada correctamente y PRIMER_INGRESO_COMPLETADO establecido en 1",
+    });
   } catch (err) {
-    console.error('Error al procesar la solicitud:', err);
-    res.status(500).json({ error: 'Error al procesar la solicitud' });
+    console.error("Error al procesar la solicitud:", err);
+    res.status(500).json({ error: "Error al procesar la solicitud" });
   }
 });
-
-
 
 //********** Actualizar lo PRIMER_INGRESO_COMPLETADO ********
 app.put('/desactivarPersona', async (req, res) => {
