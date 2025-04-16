@@ -1726,6 +1726,66 @@ console.error(condominioResults);
         console.log('Correo enviado a:', emailList);
       });
     }
+        // ********* NUEVA LÓGICA: Notificar a administradores del condominio actual *********
+
+    // 1. Obtener nombres de administradores del condominio (ID_PADRE = 1)
+    const [adminPersonas] = await mysqlPool.query(
+      `SELECT NOMBRE_PERSONA FROM TBL_PERSONAS 
+       WHERE ID_CONDOMINIO = ? AND ID_PADRE = 1`,
+      [ID_CONDOMINIO]
+    );
+
+    if (adminPersonas.length > 0) {
+      const nombresAdmin = adminPersonas.map((p) => p.NOMBRE_PERSONA);
+
+      // 2. Buscar los correos de esos administradores en TBL_MS_USUARIO
+      const [correosAdminCondominio] = await mysqlPool.query(
+        `SELECT EMAIL FROM TBL_MS_USUARIO 
+         WHERE NOMBRE_USUARIO IN (?)`,
+        [nombresAdmin]
+      );
+
+      const correos = correosAdminCondominio.map((c) => c.EMAIL);
+
+      if (correos.length > 0) {
+        const mailOptionsAdmin = {
+          from: "villalasacacias@villalasacacias.com",
+          to: correos,
+          subject: "Nuevo usuario registrado en su condominio",
+          html: `
+            <p>Estimado(s) Administrador(es),</p>
+            <p>Se ha registrado un nuevo usuario en su condominio <strong>${P_CONDOMINIO}</strong>.</p>
+            <p><strong>Nombre:</strong> ${nombreUsuario}</p>
+            <p><strong>DNI:</strong> ${P_DNI}</p>
+            <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
+            <p>Por favor, tenga en cuenta este nuevo registro para futuras gestiones administrativas.</p>
+            <p>Atentamente,</p>
+            <p>Villa Las Acacias</p>
+          `,
+        };
+
+        transporter.sendMail(mailOptionsAdmin, (err) => {
+          if (err) {
+            console.error(
+              "Error al enviar correo a administradores del condominio:",
+              err
+            );
+          } else {
+            console.log(
+              "Correo enviado a administradores del condominio:",
+              correos
+            );
+          }
+        });
+      } else {
+        console.warn(
+          "No se encontraron correos para los administradores del condominio."
+        );
+      }
+    } else {
+      console.warn("No hay administradores registrados en el condominio.");
+    }
+    //Fin de enviar los correo a los administradores de los condominios  
 
     res.status(201).json({ success: true, message: 'Persona actualizada correctamente y PRIMER_INGRESO_COMPLETADO establecido en 1' });
   } catch (err) {
