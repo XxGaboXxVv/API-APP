@@ -1826,6 +1826,7 @@ app.post("/nueva_persona", async (req, res) => {
   }
 });
 
+
 //********** Actualizar lo PRIMER_INGRESO_COMPLETADO ********
 app.put('/desactivarPersona', async (req, res) => {
   const { ID_USUARIO } = req.body;
