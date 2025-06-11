@@ -15,12 +15,14 @@ const app = express();
 app.use(bp.json());
 
 const mysqlPool = mysql.createPool({
-     host:'151.106.97.51',
-    user:'u471856612_root',
-    password:'Codem@sters123',
-    database:'u471856612_villalasacacia',
-    port:3306,
-    multipleStatements: true
+     
+     host:'31.170.167.204',
+     user:'u569522830_codemasters408',
+     password:'Codem@sters123',
+     database:'u569522830_lasacacias',
+     port:3306,
+     multipleStatements: true
+
 });
 
 // SERVIDOR DE CORREO 
