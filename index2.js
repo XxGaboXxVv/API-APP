@@ -1453,7 +1453,7 @@ app.post('/nueva_reserva', async (req, res) => {
         <p><strong>Nombre:</strong> ${NOMBRE_PERSONA}</p>
         <p><strong>DNI:</strong> ${DNI_PERSONA}</p>
         <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
-        <p><strong>Condominio:</strong> ${P_CONDOMINIO}</p>
+        <p><strong>Numero de casa:</strong> ${P_CONDOMINIO}</p>
         <p><strong>Instalación:</strong> ${nombreInstalacion}</p>
         <p><strong>Tipo de Evento:</strong> ${tipoEvento}</p>
         <p><strong>Fecha y Hora:</strong> ${horaFechaDMAHMS}</p>
@@ -1749,13 +1749,13 @@ app.post("/nueva_persona", async (req, res) => {
       const mailOptions = {
         from: "villalasacacias@villalasacacias.com",
         to: emailList,
-        subject: "Registro de Nuevo Administrador de Condominio",
+        subject: "Registro de Nuevo Administrador de la Casa",
         html: `
           <p>Estimados Administradores,</p>
-          <p>Se ha registrado un nuevo administrador para el condominio:</p>
+          <p>Se ha registrado un nuevo administrador para la casa:</p>
           <p><strong>Nombre:</strong> ${nombreUsuario}</p>
           <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
-          <p><strong>Condominio:</strong> ${P_CONDOMINIO}</p>
+          <p><strong>Numero de casa:</strong> ${P_CONDOMINIO}</p>
           <p>Saludos,</p>
           <p>Villa Las Acacias</p>
         `,
@@ -1795,7 +1795,7 @@ app.post("/nueva_persona", async (req, res) => {
           subject: "Nuevo usuario registrado en su condominio",
           html: `
             <p>Estimado(s) Administrador(es),</p>
-            <p>Se ha registrado un nuevo usuario en su condominio <strong>${P_CONDOMINIO}</strong>.</p>
+            <p>Se ha registrado un nuevo usuario en la casa <strong>${P_CONDOMINIO}</strong>.</p>
             <p><strong>Nombre:</strong> ${nombreUsuario}</p>
             <p><strong>DNI:</strong> ${P_DNI}</p>
             <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
@@ -2139,7 +2139,7 @@ app.post('/notificarMotivo', async (req, res) => {
         <li><strong>Nombre:</strong> ${nombreResidente}</li>
         <li><strong>DNI:</strong> ${dniResidente}</li>
         <li><strong>Contacto:</strong> ${contacto}</li>
-        <li><strong>Condominio:</strong> ${condominio}</li>
+        <li><strong>Numero de casa:</strong> ${condominio}</li>
       </ul>
       <p>Les solicitamos su colaboración para resolver esta situación y tomar las medidas necesarias para evitar incidentes futuros.</p>
       <p>Atentamente,</p>
