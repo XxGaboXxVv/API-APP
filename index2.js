@@ -1805,16 +1805,16 @@ app.post("/nueva_persona", async (req, res) => {
 
         transporter.sendMail(mailOptionsAdmin, (err) => {
           if (err) {
-            console.error("Error al enviar correo a administradores del condominio:", err);
+            console.error("Error al enviar correo a administradores de la casa:", err);
           } else {
-            console.log("Correo enviado a administradores del condominio:", correos);
+            console.log("Correo enviado a administradores de la casa:", correos);
           }
         });
       } else {
-        console.warn("No se encontraron correos de administradores del condominio.");
+        console.warn("No se encontraron correos de administradores de la casa.");
       }
     } else {
-      console.warn("No hay administradores registrados en el condominio.");
+      console.warn("No hay administradores registrados en la casa.");
     }
 
     res.status(201).json({
