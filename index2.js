@@ -137,10 +137,10 @@ app.post('/login', async (req, res) => {
                         <p>Tu código de verificación es:</p>
                         <p style="font-size: 24px; font-weight: bold;">${verificationCode}</p>
                         <p>Por favor, ingresa este código en la pantalla de verificación para completar el proceso de autenticación.</p>
-                        <p>Si no solicitaste este código, te recomendamos que cambies tu contraseña y te pongas en contacto con nuestro equipo de administracion de Villa Las Acacias.</p>
+                        <p>Si no solicitaste este código, te recomendamos que cambies tu contraseña y te pongas en contacto con nuestro equipo de administracion de Villas Las Acacias.</p>
                         <p>Gracias por tu cooperación.</p>
                         <p>Atentamente,</p>
-                        <p>El equipo de administración de Villa Las Acacias</p>
+                        <p>El equipo de administración de Villas Las Acacias</p>
                       `
                     };
 
@@ -591,10 +591,10 @@ app.post('/restablecer_contrasena', async (req, res) => {
                 <p>Hemos recibido una solicitud para restablecer la contraseña de tu cuenta. Para proceder, por favor utiliza la siguiente contraseña temporal:</p>
                 <p style="font-size: 24px; font-weight: bold;">${tempPassword}</p>
                 <p>Te recomendamos que inicies sesión con esta contraseña temporal y la cambies de inmediato para proteger tu cuenta.</p>
-                <p>Si no solicitaste este restablecimiento, te recomendamos que ignores este correo y te pongas en contacto con nuestro equipo de administración de Villa Las Acacias inmediatamente.</p>
+                <p>Si no solicitaste este restablecimiento, te recomendamos que ignores este correo y te pongas en contacto con nuestro equipo de administración de Villas Las Acacias inmediatamente.</p>
                 <p>Gracias por tu atención.</p>
                 <p>Atentamente,</p>
-                <p>El equipo de administración de Villa Las Acacias</p>
+                <p>El equipo de administración de Villas Las Acacias</p>
             `
         };
 
@@ -1459,7 +1459,7 @@ app.post('/nueva_reserva', async (req, res) => {
         <p><strong>Fecha y Hora:</strong> ${horaFechaDMAHMS}</p>
         <p>Les solicitamos brindar el apoyo necesario para que la nueva reservación se ejecute de manera adecuada.</p>
         <p>Atentamente,</p>
-        <p>El equipo de administración de Villa Las Acacias</p>
+        <p>El equipo de administración de Villas Las Acacias</p>
       `
     };
 
@@ -1757,7 +1757,7 @@ app.post("/nueva_persona", async (req, res) => {
           <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
           <p><strong>Numero de casa:</strong> ${P_CONDOMINIO}</p>
           <p>Saludos,</p>
-          <p>Villa Las Acacias</p>
+          <p>Villas Las Acacias</p>
         `,
       };
 
@@ -1799,7 +1799,7 @@ app.post("/nueva_persona", async (req, res) => {
             <p><strong>Nombre:</strong> ${nombreUsuario}</p>
             <p><strong>DNI:</strong> ${P_DNI}</p>
             <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
-            <p>Saludos cordiales,<br>Villa Las Acacias</p>
+            <p>Saludos cordiales,<br>Villas Las Acacias</p>
           `,
         };
 
@@ -2008,7 +2008,7 @@ app.post('/rechazar', async (req, res) => {
               <p>Lamentamos informarle que su solicitud ha sido rechazada en Villa Las Acacias.</p>
               <p>Si tiene alguna pregunta o necesita más información, no dude en ponerse en contacto con la administración.</p>
               <p>Atentamente,</p>
-              <p>El equipo de administración de Villa Las Acacias</p>
+              <p>El equipo de administración de Villas Las Acacias</p>
           `
       };
 
@@ -2072,7 +2072,7 @@ app.post('/confirmar_visita', async (req, res) => {
               <p><strong>Número de personas:</strong> ${numeroPersonas}</p>
               <p><strong>Fecha y hora de llegada:</strong> ${fechaActual}</p>
               <p>Atentamente,</p>
-              <p>El equipo de administración de Villa Las Acacias</p>
+              <p>El equipo de administración de Villas Las Acacias</p>
           `
       };
 
@@ -2143,7 +2143,7 @@ app.post('/notificarMotivo', async (req, res) => {
       </ul>
       <p>Les solicitamos su colaboración para resolver esta situación y tomar las medidas necesarias para evitar incidentes futuros.</p>
       <p>Atentamente,</p>
-      <p>El equipo de administración de Villa Las Acacias</p>
+      <p>El equipo de administración de Villas Las Acacias</p>
     `;
 
     // Opciones de envío
