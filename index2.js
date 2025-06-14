@@ -1749,10 +1749,10 @@ app.post("/nueva_persona", async (req, res) => {
       const mailOptions = {
         from: "villalasacacias@villalasacacias.com",
         to: emailList,
-        subject: "Registro de Nuevo Administrador de la Casa",
+        subject: "Registro de Nuevo Administrador de la vivienda",
         html: `
           <p>Estimados Administradores,</p>
-          <p>Se ha registrado un nuevo administrador para la casa:</p>
+          <p>Se ha registrado un nuevo administrador para la vivienda:</p>
           <p><strong>Nombre:</strong> ${nombreUsuario}</p>
           <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
           <p><strong>Numero de casa:</strong> ${P_CONDOMINIO}</p>
@@ -1792,10 +1792,10 @@ app.post("/nueva_persona", async (req, res) => {
         const mailOptionsAdmin = {
           from: "villalasacacias@villalasacacias.com",
           to: correos,
-          subject: "Nuevo usuario registrado en su casa",
+          subject: "Nuevo usuario registrado en la vivienda",
           html: `
             <p>Estimado(s) Administrador(es),</p>
-            <p>Se ha registrado un nuevo usuario en la casa <strong>${P_CONDOMINIO}</strong>.</p>
+            <p>Se ha registrado un nuevo usuario en la vivienda <strong>${P_CONDOMINIO}</strong>.</p>
             <p><strong>Nombre:</strong> ${nombreUsuario}</p>
             <p><strong>DNI:</strong> ${P_DNI}</p>
             <p><strong>Contacto:</strong> ${P_CONTACTO}</p>
@@ -1805,16 +1805,16 @@ app.post("/nueva_persona", async (req, res) => {
 
         transporter.sendMail(mailOptionsAdmin, (err) => {
           if (err) {
-            console.error("Error al enviar correo a administradores de la casa:", err);
+            console.error("Error al enviar correo a administradores de la vivienda:", err);
           } else {
-            console.log("Correo enviado a administradores de la casa:", correos);
+            console.log("Correo enviado a administradores de la vivienda:", correos);
           }
         });
       } else {
-        console.warn("No se encontraron correos de administradores de la casa.");
+        console.warn("No se encontraron correos de administradores de la vivienda.");
       }
     } else {
-      console.warn("No hay administradores registrados en la casa.");
+      console.warn("No hay administradores registrados en la vivienda.");
     }
 
     res.status(201).json({
