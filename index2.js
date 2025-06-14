@@ -450,7 +450,7 @@ app.post('/register', async (req, res) => {
         <p>Si no solicitaste esta verificación, por favor ignora este mensaje.</p>
         <p>Gracias por confiar en nosotros.</p>
         <p>Atentamente,</p>
-        <p>El equipo de soporte de Vila Las Acacias</p>
+        <p>El equipo de soporte de Villas Las Acacias</p>
       `
     };
 
