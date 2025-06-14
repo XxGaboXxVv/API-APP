@@ -1792,7 +1792,7 @@ app.post("/nueva_persona", async (req, res) => {
         const mailOptionsAdmin = {
           from: "villalasacacias@villalasacacias.com",
           to: correos,
-          subject: "Nuevo usuario registrado en su condominio",
+          subject: "Nuevo usuario registrado en su casa",
           html: `
             <p>Estimado(s) Administrador(es),</p>
             <p>Se ha registrado un nuevo usuario en la casa <strong>${P_CONDOMINIO}</strong>.</p>
