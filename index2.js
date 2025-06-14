@@ -1441,7 +1441,7 @@ app.post('/nueva_reserva', async (req, res) => {
 
     // Obtener los correos de los administradores
    const [adminEmails] = await mysqlPool.query(
-        "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)"
+        "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1)"
       );
     const emailList = adminEmails.map(row => row.EMAIL);
     const mailOptions = {
