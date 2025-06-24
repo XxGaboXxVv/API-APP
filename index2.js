@@ -140,7 +140,7 @@ app.post('/login', async (req, res) => {
                         <p>Si no solicitaste este código, te recomendamos que cambies tu contraseña y te pongas en contacto con nuestro equipo de administracion de Villas Las Acacias.</p>
                         <p>Gracias por tu cooperación.</p>
                         <p>Atentamente,</p>
-                        <p>El equipo de administración de Villas Las Acacias</p>
+                        <p>El equipo de administración de Las Acacias</p>
                       `
                     };
 
