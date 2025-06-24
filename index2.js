@@ -21,8 +21,10 @@ const mysqlPool = mysql.createPool({
      password:'Codem@sters123',
      database:'u569522830_lasacacias',
      port:3306,
-     multipleStatements: true
-
+    waitForConnections: true,       // Espera si se supera el límite
+    connectionLimit: 20,            // ✅ MÁXIMO 10 conexiones simultáneas
+    queueLimit: 0,                  // Sin límite en cola de espera
+    idleTimeout: 60000              // Desconecta si está inactiva 60 segundos
 });
 
 // SERVIDOR DE CORREO 
@@ -47,6 +49,7 @@ app.listen(PORT, () => {
 
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
+      let connection;
 
     try {
         const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
@@ -56,7 +59,7 @@ app.post('/login', async (req, res) => {
             "SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?",
             [username]
         );
-        connection.release(); // Liberar la conexión
+       
 
         if (rows.length === 0) {
             return res.status(401).send("Usuario no encontrado");
@@ -73,15 +76,12 @@ app.post('/login', async (req, res) => {
 
         const token = generateToken();  // Generar el token
 
-        if (user.ID_ESTADO_USUARIO === 2) {
-            return res.status(402).send("Usuario inactivo");
-        } else if (user.ID_ESTADO_USUARIO === 3) {
-          return res.status(403).send("Usuario bloqueado");
-        } else if (user.ID_ESTADO_USUARIO === 4) {
-          return res.status(404).send("Usuario Nuevo");
-        } else if (user.ID_ESTADO_USUARIO === 5) {
-          return res.status(405).send("Usuario pendiente");
-        } else {
+      switch (user.ID_ESTADO_USUARIO) {
+      case 2: return res.status(402).send("Usuario inactivo");
+      case 3: return res.status(403).send("Usuario bloqueado");
+      case 4: return res.status(404).send("Usuario Nuevo");
+      case 5: return res.status(405).send("Usuario pendiente");
+      }
             const passwordIsValid = bcrypt.compareSync(password, user.CONTRASEÑA);
 
             if (!passwordIsValid) {
@@ -95,8 +95,7 @@ app.post('/login', async (req, res) => {
                   "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = ?",
                   ['INTENTOS_FALLIDOS']
               );
-              connection.release();
-               // Liberar la conexión
+              
 
                 const maxLoginAttempts = parseInt(paramRows[0].VALOR, 10);
                 if (user.INTENTOS_FALLIDOS + 1 >= maxLoginAttempts + 1) {
@@ -105,19 +104,20 @@ app.post('/login', async (req, res) => {
                         "UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 3 WHERE EMAIL = ?",
                         [username]
                     );
-                    connection.release(); // Liberar la conexión
+                    
 
                     return res.status(403).send("Usuario ha sido bloqueado por múltiples intentos fallidos");
                 } else {
                     return res.status(401).send("Contraseña incorrecta");
                 }
             } else {
-                // Actualizar los campos INTENTOS_FALLIDOS y PRIMER_INGRESO después de verificar la contraseña
-                const connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
-                await connection.query(
-                    "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = 0, PRIMER_INGRESO = IF(PRIMER_INGRESO IS NULL, CONVERT_TZ(NOW(), @@session.time_zone, '-06:00'), PRIMER_INGRESO) WHERE EMAIL = ?",
-                    [username]
-                );
+                 await connection.query(
+                `UPDATE TBL_MS_USUARIO 
+                  SET INTENTOS_FALLIDOS = 0, 
+                  PRIMER_INGRESO = IF(PRIMER_INGRESO IS NULL, CONVERT_TZ(NOW(), @@session.time_zone, '-06:00'), PRIMER_INGRESO) 
+                  WHERE EMAIL = ?`,
+                [username]
+               );
                   if (user.CODIGO_2FA === 1) {
                     // Generar y enviar código de verificación
                     const verificationCode = crypto.randomBytes(3).toString('hex').toUpperCase(); // Código de 6 dígitos en mayúsculas
@@ -156,14 +156,16 @@ app.post('/login', async (req, res) => {
                     // Si no se requiere 2FA, simplemente retorna el token y redirige
                     res.status(200).json({ token, id_usuario: user.ID_USUARIO, redirect: '/pantalla_principal' });
                 }
-
-                connection.release(); // Liberar la conexión
+              
+                
             }
-        }
-    } catch (err) {
-        console.error('Error en la operación de base de datos:', err);
-        res.status(500).send("Error interno del servidor");
-    }
+        
+   } catch (err) {
+    console.error('Error en /login:', err);
+    res.status(500).send("Error interno del servidor");
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 
@@ -194,12 +196,12 @@ app.get('/protected', verifyToken, (req, res) => {
 //*************** Verificacion de 2FA *********
 app.post('/validar_codigo_2fa', async (req, res) => {
   const { ID_USUARIO, CODIGO_VERIFICACION } = req.body;
+  let connection;
 
   try {
     const connection = await mysqlPool.getConnection();
     
     const [results] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [ID_USUARIO]);
-    connection.release();
 
     if (results.length === 0) {
       return res.status(400).json({ message: 'Usuario no encontrado' });
@@ -225,6 +227,8 @@ app.post('/validar_codigo_2fa', async (req, res) => {
   } catch (err) {
     console.error('Error al verificar el código:', err);
     res.status(500).json({ message: 'Error al verificar el código' });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
@@ -738,6 +742,7 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
 // ************   Ruta para registrar una visita
 app.post('/registrar_visitas', async (req, res) => {
   const { usuarioId, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_PERSONAS, NUM_PLACA, isRecurrentVisitor, FECHA_VENCIMIENTO } = req.body;
+  let connection;
 
   try {
     const connection = await mysqlPool.getConnection();
@@ -746,7 +751,6 @@ app.post('/registrar_visitas', async (req, res) => {
     const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (usuarioResults.length === 0) {
-      connection.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
@@ -756,7 +760,6 @@ app.post('/registrar_visitas', async (req, res) => {
     const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (personaResults.length === 0) {
-      connection.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
@@ -766,7 +769,6 @@ app.post('/registrar_visitas', async (req, res) => {
     const [parametroResults] = await connection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = "QR_VENCIMIENTO"');
 
     if (parametroResults.length === 0) {
-      connection.release();
       return res.status(404).json({ message: 'Parámetro no encontrado' });
     }
 
@@ -816,7 +818,6 @@ app.post('/registrar_visitas', async (req, res) => {
       WHERE p.ID_PERSONA = ?`, [ID_PERSONA]);
 
     if (personaInfoResults.length === 0) {
-      connection.release();
       return res.status(404).json({ message: 'Información del QR no encontrada' });
     }
 
@@ -857,7 +858,6 @@ app.post('/registrar_visitas', async (req, res) => {
       });
     });
 
-    connection.release();
 
     res.status(201).json({
       message: isRecurrentVisitor ? 'Visitante recurrente registrado exitosamente' : 'Visita registrada exitosamente',
@@ -866,6 +866,8 @@ app.post('/registrar_visitas', async (req, res) => {
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ message: 'Error en el servidor' });
+  } finally {
+    if (connection) connection.release(); // Siempre liberar
   }
 });
 
@@ -878,9 +880,11 @@ app.post('/validateQR', async (req, res) => {
   if (!ID_VISITANTE) {
     return res.status(400).json({ message: 'ID de visitante no proporcionado' });
   }
+  let connection;
+
 
   try {
-    const connection = await mysqlPool.getConnection();
+     connection = await mysqlPool.getConnection();
 
     // Verificar si el visitante existe en la base de datos
     const [visitanteResults] = await connection.query(
@@ -889,7 +893,6 @@ app.post('/validateQR', async (req, res) => {
     );
 
     if (visitanteResults.length === 0) {
-      connection.release();
       return res.status(404).json({ message: 'ID de visitante no encontrado' });
     }
 
@@ -901,7 +904,6 @@ app.post('/validateQR', async (req, res) => {
     );
 
     if (parametroResults.length === 0) {
-      connection.release();
       return res.status(500).json({ message: 'Parámetro QR_EVENTOS no configurado' });
     }
 
@@ -909,16 +911,16 @@ app.post('/validateQR', async (req, res) => {
 
     // Validar si el código QR ya fue escaneado
     if (estadoQR == valorQREventos) {
-      connection.release();
       return res.status(400).json({ message: 'Código QR ya escaneado' });
     }
 
     // Respuesta exitosa
-    connection.release();
     return res.status(200).json({ message: 'Código QR válido' });
   } catch (error) {
     console.error('Error al validar el código QR:', error);
     return res.status(500).json({ message: 'Error interno al validar el código QR' });
+  } finally {
+    if (connection) connection.release(); //  Siempre liberar
   }
 });
 
@@ -933,9 +935,12 @@ app.post('/incrementarEstadoQR', async (req, res) => {
     return res.status(400).json({ message: 'ID de visitante no proporcionado' });
     
   }
+
+    let connection;
+
   try {
     // Obtener una conexión del pool
-    const connection = await mysqlPool.getConnection();
+     connection = await mysqlPool.getConnection();
 
     // Consultar el estado del QR en TBL_REGVISITAS
     const [visitanteResults] = await connection.query(
@@ -944,7 +949,6 @@ app.post('/incrementarEstadoQR', async (req, res) => {
     );
 
     if (visitanteResults.length === 0) {
-      connection.release();
       return res.status(404).json({ error: 'Visitante no encontrado' });
     }
 
@@ -957,13 +961,12 @@ app.post('/incrementarEstadoQR', async (req, res) => {
       [nuevoEstadoQR, ID_VISITANTE]
     );
 
-    // Liberar la conexión
-    connection.release();
-
     return res.status(200).json({ message: 'Estado QR incrementado exitosamente'});
   } catch (error) {
     console.error('Error al incrementar el estado del QR:', error);
     return res.status(500).json({ error: 'Error al procesar la solicitud' });
+  } finally {
+    if (connection) connection.release(); // Siempre liberar
   }
 });
 
@@ -979,15 +982,16 @@ app.get('/anuncios_eventos', async (req, res) => {
         SELECT ID_ANUNCIOS_EVENTOS FROM TBL_ANUNCIOS_OCULTOS WHERE ID_USUARIO = ?
     )
     ORDER BY FECHA_HORA DESC`;
-
+let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     const [results] = await connection.query(query, [usuarioId]);
-    connection.release();
     res.status(200).json(results);
   } catch (error) {
     console.error('Error al obtener los anuncios:', error);
     res.status(500).send('Error al obtener los anuncios');
+  } finally {
+    if (connection) connection.release(); //  Siempre liberar
   }
 });
 
@@ -1001,15 +1005,16 @@ app.post('/ocultar_anuncio', async (req, res) => {
   const query = `
     INSERT INTO TBL_ANUNCIOS_OCULTOS (ID_USUARIO, ID_ANUNCIOS_EVENTOS) 
     VALUES (?, ?)`;
-
+let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     await connection.query(query, [usuarioId, anuncioId]);
-    connection.release();
     res.status(200).send('Anuncio ocultado exitosamente');
   } catch (error) {
     console.error('Error al ocultar el anuncio:', error);
     res.status(500).send('Error al ocultar el anuncio');
+  } finally {
+    if (connection) connection.release(); //  Siempre liberar
   }
 });
 
@@ -1024,10 +1029,10 @@ app.get('/perfil', async (req, res) => {
     FROM TBL_MS_USUARIO 
     WHERE ID_USUARIO = ?`;
 
+    let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     const [results] = await connection.query(query, [usuarioId]);
-    connection.release();
 
     if (results.length > 0) {
       res.status(200).json(results[0]);
@@ -1038,6 +1043,8 @@ app.get('/perfil', async (req, res) => {
   } catch (error) {
     console.error('Error al obtener el perfil del usuario:', error);
     res.status(500).send('Error al obtener el perfil del usuario');
+  } finally {
+    if (connection) connection.release();
   }
 });
 
@@ -1046,15 +1053,14 @@ app.get('/perfil', async (req, res) => {
 //********** Consultar Reservaciones *********
 app.get('/consultar_reservaciones', async (req, res) => {
   const usuarioId = req.query.usuario_id;
-
+let connection
   try {
-    const connection = await mysqlPool.getConnection();
+     connection = await mysqlPool.getConnection();
 
     // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
     const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (!usuarioResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
@@ -1064,7 +1070,6 @@ app.get('/consultar_reservaciones', async (req, res) => {
     const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
@@ -1093,12 +1098,13 @@ SELECT
     r.HORA_FECHA ASC;
   `;
     const [reservasResults] = await connection.query(query, [ID_PERSONA]);
-    connection.release();
 
     res.json(reservasResults);
   } catch (error) {
     console.error('Error al obtener las reservas:', error);
     res.status(500).json({ error: 'Error al obtener las reservas' });
+  } finally {
+    if (connection) connection.release(); 
   }
 });
 
@@ -1108,14 +1114,14 @@ SELECT
 app.get('/consultar_visitas', async (req, res) => {
   const usuarioId = req.query.usuario_id;
 
+  let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
 
     // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
     const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (!usuarioResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
@@ -1125,7 +1131,6 @@ app.get('/consultar_visitas', async (req, res) => {
     const [personaResults] = await connection.query('SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
@@ -1155,13 +1160,14 @@ app.get('/consultar_visitas', async (req, res) => {
     // Combinar los resultados de ambas consultas
     const resultados = [...regVisitasResults, ...visitantesRecurrentesResults];
 
-    connection.release();
 
     // Retornar los resultados a la aplicación Flutter
     res.json(resultados);
   } catch (error) {
     console.error('Error al consultar visitas:', error);
     res.status(500).json({ error: 'Error al consultar visitas' });
+  } finally {
+    if (connection) connection.release(); 
   }
 });
 
