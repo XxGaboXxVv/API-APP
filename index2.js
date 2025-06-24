@@ -52,7 +52,7 @@ app.post('/login', async (req, res) => {
       let connection;
 
     try {
-        const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+         connection = await mysqlPool.getConnection(); // Obtener conexión del pool
 
         // Consultar el usuario
         const [rows] = await connection.query(
