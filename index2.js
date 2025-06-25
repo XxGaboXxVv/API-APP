@@ -1,4 +1,3 @@
-
 const nodemailer = require('nodemailer');
 const mysql = require('mysql2/promise'); // Usa mysql2/promise
 const express = require('express');
@@ -15,16 +14,16 @@ const app = express();
 app.use(bp.json());
 
 const mysqlPool = mysql.createPool({
-     
-     host:'31.170.167.204',
+
+     host:'31.97.136.214',
      user:'u569522830_codemasters408',
      password:'Codem@sters123',
-     database:'u569522830_lasacacias',
+     database:'lasacacias',
      port:3306,
     waitForConnections: true,       // Espera si se supera el límite
-    connectionLimit: 20,            // ✅ MÁXIMO 10 conexiones simultáneas
+    connectionLimit: 40,            // ✅ MÁXIM0 conexiones simultáneas
     queueLimit: 0,                  // Sin límite en cola de espera
-    idleTimeout: 60000              // Desconecta si está inactiva 60 segundos
+    connectTimeout: 60000           // Desconecta si está inactiva 60 segundos
 });
 
 // SERVIDOR DE CORREO 
@@ -41,7 +40,7 @@ auth: {
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Servidor corriendo en el puerto ${PORT}`);
 });
 
 
@@ -85,7 +84,7 @@ app.post('/login', async (req, res) => {
             const passwordIsValid = bcrypt.compareSync(password, user.CONTRASEÑA);
 
             if (!passwordIsValid) {
-                const connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
+                 connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
                 await connection.query(
                     "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?",
                     [username]
@@ -99,7 +98,7 @@ app.post('/login', async (req, res) => {
 
                 const maxLoginAttempts = parseInt(paramRows[0].VALOR, 10);
                 if (user.INTENTOS_FALLIDOS + 1 >= maxLoginAttempts + 1) {
-                    const connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
+                     connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
                     await connection.query(
                         "UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 3 WHERE EMAIL = ?",
                         [username]
@@ -163,8 +162,11 @@ app.post('/login', async (req, res) => {
    } catch (err) {
     console.error('Error en /login:', err);
     res.status(500).send("Error interno del servidor");
-  } finally {
-    if (connection) connection.release();
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -199,7 +201,7 @@ app.post('/validar_codigo_2fa', async (req, res) => {
   let connection;
 
   try {
-    const connection = await mysqlPool.getConnection();
+     connection = await mysqlPool.getConnection();
     
     const [results] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [ID_USUARIO]);
 
@@ -228,7 +230,10 @@ app.post('/validar_codigo_2fa', async (req, res) => {
     console.error('Error al verificar el código:', err);
     res.status(500).json({ message: 'Error al verificar el código' });
   } finally {
-    if (connection) connection.release();
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -243,7 +248,7 @@ app.post('/set2FAStatus', async (req, res) => {
   }
 
   const token = authHeader.split(' ')[1];
-
+  let connection
   try {
     const decoded = jwt.verify(token, SECRET_KEY);
     const userId = decoded.id;
@@ -253,14 +258,18 @@ app.post('/set2FAStatus', async (req, res) => {
       return res.status(400).json({ message: 'Valor inválido para 2FA' });
     }
 
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     await connection.query('UPDATE TBL_MS_USUARIO SET CODIGO_2FA = ? WHERE ID_USUARIO = ?', [enabled, userId]);
-    connection.release();
 
     res.json({ message: 'Estado de 2FA actualizado correctamente' });
   } catch (error) {
     console.error('Error al verificar el token:', error);
     res.status(500).json({ message: 'Error al verificar el token' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -275,14 +284,14 @@ app.get('/get2FAStatus', async (req, res) => {
   }
 
   const token = authHeader.split(' ')[1];
-
+  let connection
   try {
     const decoded = jwt.verify(token, SECRET_KEY);
     const userId = decoded.id;
 
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     const [results] = await connection.query('SELECT CODIGO_2FA FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [userId]);
-    connection.release();
+    
 
     if (results.length > 0) {
       res.json({ enabled: results[0].CODIGO_2FA });
@@ -292,6 +301,11 @@ app.get('/get2FAStatus', async (req, res) => {
   } catch (error) {
     console.error('Error al verificar el token:', error);
     res.status(500).json({ message: 'Error al verificar el token' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -327,11 +341,11 @@ app.post('/register', async (req, res) => {
     console.error('Faltan campos requeridos:', { NOMBRE_USUARIO, EMAIL, CONTRASEÑA });
     return res.status(400).json({ message: 'Todos los campos son requeridos' });
   }
-
+  let connection
   try {
     console.log('Cifrando contraseña.');
     const hashedPassword = await bcrypt.hash(CONTRASEÑA, 8);
-    const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+    connection = await mysqlPool.getConnection(); // Obtener conexión del pool
     console.log('Conexión a la base de datos establecida.');
 
         // Verificar si el nombre de usuario ya existe
@@ -342,7 +356,6 @@ app.post('/register', async (req, res) => {
     
           if (usuarioExistente.PRIMER_INGRESO_COMPLETADO === 1) {
             console.error('Persona ya registrada y primer ingreso completado.');
-            connection.release();
             return res.status(400).json({ message: 'Nombre de persona ya registrado' });
           }
         }
@@ -356,7 +369,6 @@ app.post('/register', async (req, res) => {
 
       if (usuarioExistente.PRIMER_INGRESO_COMPLETADO === 1) {
         console.error('El usuario ya ha completado el primer ingreso.');
-        connection.release(); // Liberar la conexión
         return res.status(400).json({ message: 'Correo ya registrado' });
       } 
       if (usuarioExistente.PRIMER_INGRESO_COMPLETADO === 0) {
@@ -416,7 +428,7 @@ app.post('/register', async (req, res) => {
           });
         });
 
-        //connection.release();
+        
         return;
       }
     }
@@ -438,8 +450,7 @@ app.post('/register', async (req, res) => {
     await connection.query(personaQuery, [NOMBRE_USUARIO]);
     console.log('Nombre de usuario insertado en TBL_PERSONAS.');
 
-    connection.release();
-    console.log('Conexión liberada.');
+   
 
     // Configurar y enviar el correo electrónico
     const mailOptions = {
@@ -480,20 +491,25 @@ app.post('/register', async (req, res) => {
   } catch (err) {
     console.error('Error al procesar el registro:', err);
     res.status(500).json({ message: 'Error al procesar el registro' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
 //******** Verificar registro ********
 app.post('/verify', async (req, res) => {
   const { EMAIL, CODIGO_VERIFICACION } = req.body;
-
+  
+  let connection
   try {
-    const connection = await mysqlPool.getConnection();
+     connection = await mysqlPool.getConnection();
     
     const [results] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
     
     if (results.length === 0) {
-      connection.release();
       return res.status(400).json({ message: 'Correo no encontrado' });
     }
 
@@ -501,12 +517,10 @@ app.post('/verify', async (req, res) => {
 
     if (user.INTENTOS_FALLIDOS >= 5) {
       await connection.query('DELETE FROM TBL_MS_USUARIO WHERE EMAIL = ?', [EMAIL]);
-      connection.release();
       return res.status(400).json({ message: 'Has alcanzado el límite de intentos de verificación.' });
     }
 
     if (user.CODIGO_VERIFICACION === null) {
-      connection.release();
       return res.status(400).json({ message: 'No hay un código de verificación disponible para este usuario' });
     }
 
@@ -519,13 +533,11 @@ app.post('/verify', async (req, res) => {
       decryptedVerificationCode += decipher.final('utf8');
     } catch (error) {
       console.error('Error al descifrar el código:', error);
-      connection.release();
       return res.status(500).json({ message: 'Error al procesar el código de verificación' });
     }
 
     if (CODIGO_VERIFICACION !== decryptedVerificationCode) {
       await connection.query('UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?', [EMAIL]);
-      connection.release();
       return res.status(400).json({ message: 'Código de verificación incorrecto' });
     }
 
@@ -537,12 +549,16 @@ app.post('/verify', async (req, res) => {
 
     await connection.query('UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = NULL, PRIMER_INGRESO = ?, FECHA_VENCIMIENTO = ?, ID_ESTADO_USUARIO = 5, INTENTOS_FALLIDOS = 0 WHERE EMAIL = ?', [primerIngreso, fechaVencimiento, EMAIL]);
 
-    connection.release();
 
     res.status(200).json({ message: 'Correo verificado exitosamente' });
   } catch (error) {
     console.error('Error al procesar la verificación:', error);
     res.status(500).json({ message: 'Error al procesar la verificación' });
+  }  finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -553,15 +569,14 @@ app.post('/restablecer_contrasena', async (req, res) => {
     if (!email) {
         return res.status(400).json({ message: 'El campo de correo electrónico es requerido.' });
     }
-
+        let connection
     try {
-        const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+         connection = await mysqlPool.getConnection(); // Obtener conexión del pool
 
         // Verificar si el usuario existe
         const [userResults] = await connection.query('SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?', [email]);
 
         if (userResults.length === 0) {
-            connection.release(); // Liberar la conexión
             return res.status(404).json({ message: 'Usuario no encontrado' });
         }
 
@@ -583,7 +598,6 @@ app.post('/restablecer_contrasena', async (req, res) => {
             [hashedTempPassword, email]
         );
 
-        connection.release(); // Liberar la conexión
 
         // Configurar y enviar el correo electrónico
         const mailOptions = {
@@ -612,7 +626,12 @@ app.post('/restablecer_contrasena', async (req, res) => {
     } catch (err) {
         console.error('Error al procesar el restablecimiento de contraseña:', err);
         res.status(500).json({ message: 'Error al procesar la solicitud' });
+      } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
     }
+  }
 });
 
 
@@ -624,15 +643,14 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
   if (!email || !tempPassword) {
     return res.status(400).json({ message: 'El correo electrónico y la contraseña temporal son requeridos' });
   }
-
+      let connection
   try {
-    const connection = await mysqlPool.getConnection();
+       connection = await mysqlPool.getConnection();
     
     // Verificar el token
     const [tokenResults] = await connection.query('SELECT * FROM TBL_REINICIO_CONTRASEÑA WHERE EMAIL = ?', [email]);
 
     if (tokenResults.length === 0) {
-      connection.release();
       return res.status(404).json({ message: 'Token no encontrado' });
     }
 
@@ -640,7 +658,6 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     const isMatch = await bcrypt.compare(tempPassword, token.TOKEN);
 
     if (!isMatch) {
-      connection.release();
       return res.status(400).json({ message: 'Contraseña temporal incorrecta' });
     }
 
@@ -648,7 +665,6 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     const [userResults] = await connection.query('SELECT ID_USUARIO, CONTRASEÑA FROM TBL_MS_USUARIO WHERE EMAIL = ?', [email]);
 
     if (userResults.length === 0) {
-      connection.release();
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
@@ -661,7 +677,6 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     const hashedTempPassword = await bcrypt.hash(tempPassword, 10);
     await connection.query('UPDATE TBL_MS_USUARIO SET CONTRASEÑA = ?, ID_ESTADO_USUARIO = 1, INTENTOS_FALLIDOS = 0 WHERE ID_USUARIO = ?', [hashedTempPassword, user.ID_USUARIO]);
 
-    connection.release();
 
     // Generar el token
     token = jwt.sign({ id: user.ID_USUARIO }, SECRET_KEY, {
@@ -672,6 +687,11 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
   } catch (error) {
     console.error('Error al procesar la verificación de la contraseña temporal:', error);
     res.status(500).json({ message: 'Error al procesar la verificación de la contraseña temporal' });
+  } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -689,19 +709,18 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
   }
 
   const token = authHeader.split(' ')[1];
-
+  let connection
   try {
     // Verificar y decodificar el token
     const decoded = jwt.verify(token, SECRET_KEY);
     const userId = decoded.id;
 
-    const connection = await mysqlPool.getConnection();
+     connection = await mysqlPool.getConnection();
 
     // Consultar la contraseña actual del usuario desde la base de datos
     const [userResults] = await connection.query('SELECT CONTRASEÑA FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [userId]);
 
     if (userResults.length === 0) {
-      connection.release();
       console.error('Usuario no encontrado');
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -711,7 +730,6 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     // Verificar si la nueva contraseña es igual a la actual
     const isSamePassword = await bcrypt.compare(nueva, contrasenaActual);
     if (isSamePassword) {
-      connection.release();
       console.error('No puedes reutilizar la contraseña actual');
       return res.status(400).json({ message: 'No puedes reutilizar la contraseña actual' });
     }
@@ -719,7 +737,6 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     // Verificar si la contraseña actual proporcionada es correcta
     const isMatch = await bcrypt.compare(actual, contrasenaActual);
     if (!isMatch) {
-      connection.release();
       console.error('Contraseña actual incorrecta');
       return res.status(401).json({ message: 'Contraseña actual incorrecta' });
     }
@@ -730,12 +747,16 @@ app.post('/verificar_contrasena_temporal', async (req, res) => {
     // Actualizar la nueva contraseña en la tabla TBL_MS_USUARIO
     await connection.query('UPDATE TBL_MS_USUARIO SET CONTRASEÑA = ? WHERE ID_USUARIO = ?', [nuevaHashed, userId]);
 
-    connection.release();
 
     res.status(200).json({ message: 'Contraseña actualizada correctamente' });
   } catch (error) {
     console.error('Error al cambiar la contraseña:', error);
     res.status(500).json({ message: 'Error al cambiar la contraseña' });
+   } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -745,7 +766,7 @@ app.post('/registrar_visitas', async (req, res) => {
   let connection;
 
   try {
-    const connection = await mysqlPool.getConnection();
+     connection = await mysqlPool.getConnection();
 
     // Obtener el NOMBRE_USUARIO usando el usuarioId
     const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
@@ -866,8 +887,11 @@ app.post('/registrar_visitas', async (req, res) => {
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ message: 'Error en el servidor' });
-  } finally {
-    if (connection) connection.release(); // Siempre liberar
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -919,8 +943,11 @@ app.post('/validateQR', async (req, res) => {
   } catch (error) {
     console.error('Error al validar el código QR:', error);
     return res.status(500).json({ message: 'Error interno al validar el código QR' });
-  } finally {
-    if (connection) connection.release(); //  Siempre liberar
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -965,8 +992,11 @@ app.post('/incrementarEstadoQR', async (req, res) => {
   } catch (error) {
     console.error('Error al incrementar el estado del QR:', error);
     return res.status(500).json({ error: 'Error al procesar la solicitud' });
-  } finally {
-    if (connection) connection.release(); // Siempre liberar
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -991,7 +1021,10 @@ let connection
     console.error('Error al obtener los anuncios:', error);
     res.status(500).send('Error al obtener los anuncios');
   } finally {
-    if (connection) connection.release(); //  Siempre liberar
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1013,8 +1046,11 @@ let connection
   } catch (error) {
     console.error('Error al ocultar el anuncio:', error);
     res.status(500).send('Error al ocultar el anuncio');
-  } finally {
-    if (connection) connection.release(); //  Siempre liberar
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1043,8 +1079,11 @@ app.get('/perfil', async (req, res) => {
   } catch (error) {
     console.error('Error al obtener el perfil del usuario:', error);
     res.status(500).send('Error al obtener el perfil del usuario');
-  } finally {
-    if (connection) connection.release();
+   } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1103,8 +1142,11 @@ SELECT
   } catch (error) {
     console.error('Error al obtener las reservas:', error);
     res.status(500).json({ error: 'Error al obtener las reservas' });
-  } finally {
-    if (connection) connection.release(); 
+   } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1166,8 +1208,11 @@ app.get('/consultar_visitas', async (req, res) => {
   } catch (error) {
     console.error('Error al consultar visitas:', error);
     res.status(500).json({ error: 'Error al consultar visitas' });
-  } finally {
-    if (connection) connection.release(); 
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1207,10 +1252,10 @@ app.get('/consulta_reservaciones_futuras', async (req, res) => {
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
     res.status(500).send('Error en el servidor');
-  } finally {
-    if (connection) {
-      // Liberar la conexión de vuelta al pool
-      connection.release();
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
     }
   }
 });
@@ -1257,10 +1302,10 @@ app.get('/obtener_horarios', async (req, res) => {
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
     res.status(500).send('Error en el servidor');
-  } finally {
-    if (connection) {
-      // Liberar la conexión de vuelta al pool
-      connection.release();
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
     }
   }
 });
@@ -1270,15 +1315,14 @@ app.get('/obtener_horarios', async (req, res) => {
 //********* Consultar familia ************
 app.get('/consultar_familia', async (req, res) => {
   const usuarioId = req.query.usuario_id;
-
+  let connection
   try {
-    const connection = await mysqlPool.getConnection();
+     connection = await mysqlPool.getConnection();
 
     // Obtener el NOMBRE_USUARIO de la tabla TBL_MS_USUARIO usando usuarioId
     const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (!usuarioResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
@@ -1288,7 +1332,6 @@ app.get('/consultar_familia', async (req, res) => {
     const [personaResults] = await connection.query('SELECT ID_PERSONA, ID_CONDOMINIO FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
@@ -1316,13 +1359,17 @@ app.get('/consultar_familia', async (req, res) => {
 
     const [personasResults] = await connection.query(queryPersonas, [ID_CONDOMINIO]);
 
-    connection.release();
 
     // Retornar los resultados a la aplicación Flutter
     res.json(personasResults);
   } catch (error) {
     console.error('Error al consultar la familia:', error);
     res.status(500).json({ error: 'Error al consultar la familia' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1331,15 +1378,14 @@ app.get('/consultar_familia', async (req, res) => {
 //********** Insertar Reserva *****
 app.post('/nueva_reserva', async (req, res) => {
   const { usuarioId, nombreInstalacion, tipoEvento, horaFecha } = req.body;
-
+    let connection
   try {
-    const connection = await mysqlPool.getConnection();
+     connection = await mysqlPool.getConnection();
 
     // Obtener el NOMBRE_USUARIO usando el usuarioId
     const [usuarioResults] = await connection.query('SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?', [usuarioId]);
 
     if (!usuarioResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
@@ -1349,7 +1395,6 @@ app.post('/nueva_reserva', async (req, res) => {
     const [personaResults] = await connection.query('SELECT ID_PERSONA, NOMBRE_PERSONA, DNI_PERSONA, ID_CONTACTO, ID_CONDOMINIO FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?', [nombreUsuario]);
 
     if (!personaResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Persona no encontrada' });
     }
 
@@ -1359,7 +1404,6 @@ app.post('/nueva_reserva', async (req, res) => {
     const [contactoResults] = await connection.query('SELECT DESCRIPCION FROM TBL_CONTACTOS WHERE ID_CONTACTO = ?', [ID_CONTACTO]);
 
     if (!contactoResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Contacto no encontrado' });
     }
 
@@ -1369,7 +1413,6 @@ app.post('/nueva_reserva', async (req, res) => {
     const [condominioResults] = await connection.query('SELECT DESCRIPCION FROM TBL_CONDOMINIOS WHERE ID_CONDOMINIO = ?', [ID_CONDOMINIO]);
 
     if (!condominioResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Condominio no encontrado' });
     }
 
@@ -1379,7 +1422,6 @@ app.post('/nueva_reserva', async (req, res) => {
     const [instalacionResults] = await connection.query('SELECT ID_INSTALACION FROM TBL_INSTALACIONES WHERE NOMBRE_INSTALACION = ?', [nombreInstalacion]);
 
     if (!instalacionResults.length) {
-      connection.release();
       return res.status(404).json({ error: 'Instalación no encontrada' });
     }
 
@@ -1410,7 +1452,6 @@ app.post('/nueva_reserva', async (req, res) => {
     const [parametrosResults] = await connection.query('SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = ?', [jornada]);
 
     if (!parametrosResults.length) {
-      connection.release();
       return res.status(500).json({ error: 'No se pudo obtener el horario permitido' });
     }
 
@@ -1419,7 +1460,6 @@ app.post('/nueva_reserva', async (req, res) => {
     // Verificar si la hora solicitada está dentro del horario permitido
     const hora = horaFechaYMDHM.split(' ')[1];
     if (hora < horaInicio || hora > horaFin) {
-      connection.release();
       return res.status(400).json({ error: 'El horario ingresado no está permitido según los parámetros configurados' });
     }
 
@@ -1433,7 +1473,6 @@ app.post('/nueva_reserva', async (req, res) => {
     );
 
     if (reservaResults.length > 0) {
-      connection.release();
       return res.status(400).json({ error: 'Horario ya reservado' });
     }
 
@@ -1478,11 +1517,15 @@ app.post('/nueva_reserva', async (req, res) => {
       console.log('Correo enviado a:', emailList);
     });
 
-    connection.release();
     res.status(201).json({ message: 'Reserva creada exitosamente', reservaId: insertResult.insertId });
   } catch (error) {
     console.error('Error al crear la reserva:', error);
     res.status(500).json({ error: 'Error al crear la reserva' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1492,14 +1535,19 @@ app.post('/nueva_reserva', async (req, res) => {
 
 // ******* Tipos de Instalaciones *******
 app.get('/instalaciones', async (req, res) => {
+  let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     const [results] = await connection.query('SELECT NOMBRE_INSTALACION FROM TBL_INSTALACIONES');
-    connection.release();
     res.json(results);
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
     res.status(500).json({ error: 'Error al ejecutar la consulta' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1515,7 +1563,7 @@ app.post('/set2FAStatus', async (req, res) => {
   }
 
   const token = authHeader.split(' ')[1];
-
+  let connection
   try {
     // Verificar y decodificar el token
     const decoded = jwt.verify(token, SECRET_KEY);
@@ -1527,14 +1575,18 @@ app.post('/set2FAStatus', async (req, res) => {
     }
 
     // Actualizar el estado de 2FA en la base de datos
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     await connection.query('UPDATE TBL_MS_USUARIO SET CODIGO_2FA = ? WHERE ID_USUARIO = ?', [enabled, userId]);
-    connection.release();
 
     res.json({ message: 'Estado de 2FA actualizado correctamente' });
   } catch (error) {
     console.error('Error al verificar el token o actualizar el estado de 2FA:', error);
     res.status(500).json({ message: 'Error interno del servidor' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1542,53 +1594,75 @@ app.post('/set2FAStatus', async (req, res) => {
 
 //************** GET para estado de la persona *************
 app.get('/personas', async (req, res) => {
+  let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     const [results] = await connection.query('SELECT DESCRIPCION FROM TBL_ESTADO_PERSONA');
     connection.release();
     res.json(results);
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
     res.status(500).json({ error: 'Error al ejecutar la consulta' });
+  }finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
 
 app.get('/contacto', async (req, res) => {
+  let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     const [results] = await connection.query('SELECT DESCRIPCION FROM TBL_TIPO_CONTACTO');
-    connection.release();
     res.json(results);
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
     res.status(500).json({ error: 'Error al ejecutar la consulta' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
 
 
 app.get('/parentesco', async (req, res) => {
+  let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     const [results] = await connection.query('SELECT DESCRIPCION FROM TBL_PARENTESCOS');
-    connection.release();
     res.json(results);
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
     res.status(500).json({ error: 'Error al ejecutar la consulta' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
 app.get('/condominio', async (req, res) => {
+  let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     const [results] = await connection.query('SELECT DESCRIPCION FROM TBL_CONDOMINIOS');
     connection.release();
     res.json(results);
   } catch (err) {
     console.error('Error al ejecutar la consulta:', err);
     res.status(500).json({ error: 'Error al ejecutar la consulta' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1614,9 +1688,10 @@ app.post("/nueva_persona", async (req, res) => {
   ) {
     return res.status(400).json({ error: "Todos los campos son requeridos" });
   }
-
+  
+  let connection
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
 
     // Obtener ID_CONDOMINIO y USUARIOS_POR_CASA desde la descripción
     const [condominioResults] = await connection.query(
@@ -1625,7 +1700,6 @@ app.post("/nueva_persona", async (req, res) => {
     );
 
     if (condominioResults.length === 0) {
-      connection.release();
       return res.status(404).json({ error: "Condominio no encontrado" });
     }
 
@@ -1642,7 +1716,6 @@ app.post("/nueva_persona", async (req, res) => {
       usuariosRegistradosResults[0].totalUsuarios;
 
     if (totalUsuariosRegistrados >= usuariosPorCasa) {
-      connection.release();
       return res
         .status(400)
         .json({ error: "Cantidad máxima de usuarios ya registrados" });
@@ -1655,7 +1728,6 @@ app.post("/nueva_persona", async (req, res) => {
     );
 
     if (usuarioResults.length === 0) {
-      connection.release();
       return res.status(404).json({ error: "Usuario no encontrado" });
     }
 
@@ -1668,7 +1740,6 @@ app.post("/nueva_persona", async (req, res) => {
     );
 
     if (personaResults.length === 0) {
-      connection.release();
       return res.status(404).json({ error: "Persona no encontrada" });
     }
 
@@ -1696,7 +1767,6 @@ app.post("/nueva_persona", async (req, res) => {
     );
 
     if (!tipoContactoResults.length || !parentescoResults.length) {
-      connection.release();
       return res.status(405).json({ error: "Datos no encontrados" });
     }
 
@@ -1743,7 +1813,6 @@ app.post("/nueva_persona", async (req, res) => {
       [usuarioId]
     );
 
-    connection.release();
 
     // Enviar correo si es el primer administrador global
     if (isAdminRequired) {
@@ -1832,6 +1901,11 @@ app.post("/nueva_persona", async (req, res) => {
   } catch (err) {
     console.error("Error al procesar la solicitud:", err);
     res.status(500).json({ error: "Error al procesar la solicitud" });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1845,12 +1919,12 @@ app.put('/desactivarPersona', async (req, res) => {
   }
 
   const updateQuery = 'UPDATE TBL_MS_USUARIO SET PRIMER_INGRESO_COMPLETADO = 1 WHERE ID_USUARIO = ?';
+  let connection
 
   try {
-    const connection = await mysqlPool.getConnection();
+    connection = await mysqlPool.getConnection();
     const [result] = await connection.query(updateQuery, [ID_USUARIO]);
 
-    connection.release();
 
     if (result.affectedRows > 0) {
       res.status(200).json({ success: true, message: 'PRIMER_INGRESO_COMPLETADO actualizado correctamente' });
@@ -1860,6 +1934,11 @@ app.put('/desactivarPersona', async (req, res) => {
   } catch (err) {
     console.error('Error al actualizar PRIMER_INGRESO_COMPLETADO:', err);
     res.status(500).json({ error: 'Error al actualizar PRIMER_INGRESO_COMPLETADO' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -1873,8 +1952,9 @@ app.get('/solicitudes', async (req, res) => {
         return res.status(400).json({ error: 'Se requiere usuario_id' });
     }
 
+    let connection
     try {
-        const connection = await mysqlPool.getConnection(); // Obtener conexión del pool
+        connection = await mysqlPool.getConnection(); // Obtener conexión del pool
 
         // Obtener el nombre de usuario
         const [usuarioResults] = await connection.query(
@@ -1883,7 +1963,6 @@ app.get('/solicitudes', async (req, res) => {
         );
 
         if (usuarioResults.length === 0) {
-            connection.release(); // Liberar la conexión
             return res.status(404).json({ message: 'Usuario no encontrado' });
         }
 
@@ -1896,7 +1975,6 @@ app.get('/solicitudes', async (req, res) => {
         );
 
         if (personaResults.length === 0) {
-            connection.release(); // Liberar la conexión
             return res.status(404).json({ message: 'Persona no encontrada' });
         }
 
@@ -1904,7 +1982,6 @@ app.get('/solicitudes', async (req, res) => {
 
         // Verificar si el usuario es administrador (ID_PADRE debe ser 1)
         if (ID_PADRE !== 1) {
-            connection.release(); // Liberar la conexión
           return res.status(403).json({ message: 'No tienes los permisos para poder ingresar' });
         }
 
@@ -1926,7 +2003,6 @@ app.get('/solicitudes', async (req, res) => {
             [ID_CONDOMINIO]
         );
 
-        connection.release(); // Liberar la conexión
 
         if (residentesResults.length === 0) {
             return res.status(200).json({ message: 'No hay residentes pendientes de aprobación' });
@@ -1936,7 +2012,12 @@ app.get('/solicitudes', async (req, res) => {
     } catch (err) {
         console.error('Error al obtener las solicitudes de residentes:', err);
         res.status(500).json({ error: 'Error al obtener las solicitudes de residentes' });
+      } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
     }
+  }
 });
 
 //***** Acepta las solicitudes solo el que es ID_PADRE
@@ -1948,18 +2029,23 @@ app.post('/aceptar', async (req, res) => {
     }
 
     console.log('Datos recibidos en /aceptar:', req.body);
-
+    let connection
     try {
-        const [result] = await mysqlPool.query(
-            'UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 1 WHERE ID_USUARIO = ?',
-            [idUsuario]
-        );
+      connection = await mysqlPool.getConnection();
+        
+    await mysqlPool.query
+    ('UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 1 WHERE ID_USUARIO = ?',[idUsuario] );
 
         res.status(200).send('Solicitud aceptada');
     } catch (err) {
         console.error('Error al aceptar la solicitud:', err);
         res.status(500).send('Error al aceptar la solicitud');
+      } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
     }
+  }
 });
 
 //***** Rechaza las solicitudes solo el que es ID_PADRE
@@ -1972,9 +2058,10 @@ app.post('/rechazar', async (req, res) => {
 
   console.log('Datos recibidos en /rechazar:', req.body);
 
-  const connection = await mysqlPool.getConnection();
-
+  
+  let connection
   try {
+    connection = await mysqlPool.getConnection();
       // Iniciar la transacción
       await connection.beginTransaction();
 
@@ -2034,9 +2121,11 @@ app.post('/rechazar', async (req, res) => {
       await connection.rollback();
       console.error('Error al rechazar la solicitud:', err);
       res.status(500).send('Error al rechazar la solicitud');
-  } finally {
-      // Liberar la conexión
-      connection.release();
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -2045,19 +2134,16 @@ app.post('/rechazar', async (req, res) => {
 app.post('/confirmar_visita', async (req, res) => {
   console.log('Datos recibidos:', req.body); 
  const { nombreResidente, nombreVisitante, numeroPersonas } = req.body;
-
+  let connection
   try {
       // Obtener una conexión del pool
-      const connection = await mysqlPool.getConnection();
+       connection = await mysqlPool.getConnection();
 
       // Consulta para buscar el correo electrónico del residente
       const [rows] = await connection.execute(
           'SELECT EMAIL FROM TBL_MS_USUARIO WHERE NOMBRE_USUARIO = ?',
           [nombreResidente] // Usamos el parámetro nombreResidente
       );
-
-      // Liberar la conexión después de usarla
-      connection.release();
 
       if (rows.length === 0) {
           return res.status(404).json({ error: 'Residente no encontrado' });
@@ -2091,6 +2177,11 @@ app.post('/confirmar_visita', async (req, res) => {
   } catch (err) {
       console.error('Error al realizar la operación:', err);
       return res.status(500).json({ error: 'Error al procesar la solicitud' });
+    } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
 
@@ -2107,7 +2198,9 @@ app.post('/notificarMotivo', async (req, res) => {
     motivo,
   } = req.body;
 
+  let connection
   try {
+    connection=await mysqlPool.getConnection();
     // Obtener correos de administradores con ID_ROL en (1, 4)
     const [adminEmailsResult] = await mysqlPool.query(
       'SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)'
@@ -2173,5 +2266,10 @@ app.post('/notificarMotivo', async (req, res) => {
   } catch (error) {
     console.error('Error al procesar la solicitud:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
+  } finally {
+    if (connection){
+      console.log("Conexion liberada");
+    connection.release();
+    }
   }
 });
