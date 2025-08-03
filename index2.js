@@ -2846,7 +2846,14 @@ app.post("/rechazar", async (req, res) => {
 //Confirmar las visitas del QR
 app.post("/confirmar_visita", async (req, res) => {
   console.log("Datos recibidos:", req.body);
-  const { nombreResidente, nombreVisitante, numeroPersonas } = req.body;
+  const { 
+    nombreResidente, 
+    nombreVisitante, 
+    numeroPersonas,
+    nacionalidad,
+    dniVisitante,
+    carnetExtranjero
+  } = req.body;
   let connection;
   try {
     // Obtener una conexión del pool
@@ -2868,6 +2875,12 @@ app.post("/confirmar_visita", async (req, res) => {
       .tz("America/Tegucigalpa")
       .format("DD-MM-YYYY HH:mm");
 
+    // Determinar qué documento mostrar según la nacionalidad
+    const esHondurena = nacionalidad && nacionalidad.toLowerCase().includes("hondureña");
+    const documentoInfo = esHondurena 
+      ? `<p><strong>DNI del visitante:</strong> ${dniVisitante || 'No disponible'}</p>`
+      : `<p><strong>Carnet de Extranjero:</strong> ${carnetExtranjero || 'No disponible'}</p>`;
+
     // Redactar el correo
     const mailOptions = {
       from: "villalasacacias@villalasacacias.com",
@@ -2877,6 +2890,8 @@ app.post("/confirmar_visita", async (req, res) => {
               <p>Estimado ${nombreResidente},</p>
               <p>Le informamos que ha llegado un visitante:</p>
               <p><strong>Nombre del visitante:</strong> ${nombreVisitante}</p>
+              <p><strong>Nacionalidad:</strong> ${nacionalidad || 'No disponible'}</p>
+              ${documentoInfo}
               <p><strong>Número de personas:</strong> ${numeroPersonas}</p>
               <p><strong>Fecha y hora de llegada:</strong> ${fechaActual}</p>
               <p>Atentamente,</p>
@@ -2903,7 +2918,9 @@ app.post("/confirmar_visita", async (req, res) => {
 app.post("/notificarMotivo", async (req, res) => {
   const {
     nombreResidente,
+    nacionalidad,
     dniResidente,
+    carnetExtranjero,
     contacto,
     condominio,
     nombreVisitante,
@@ -2940,6 +2957,16 @@ app.post("/notificarMotivo", async (req, res) => {
         .json({ error: "No se encontró el correo del residente" });
     }
 
+    // Determinar qué documento mostrar según la nacionalidad
+    const esHondurena = nacionalidad && nacionalidad.toLowerCase().includes("hondureña");
+    const documentoVisitante = esHondurena 
+      ? `<li><strong>DNI:</strong> ${dniVisitante || 'No disponible'}</li>`
+      : `<li><strong>Carnet de Extranjero:</strong> ${carnetExtranjero || 'No disponible'}</li>`;
+    
+    const documentoResidente = esHondurena 
+      ? `<li><strong>DNI:</strong> ${dniResidente || 'No disponible'}</li>`
+      : `<li><strong>Carnet de Extranjero:</strong> ${carnetExtranjero || 'No disponible'}</li>`;
+
     // Crear el contenido del correo
     const emailContent = `
       <p>Estimados Administradores y Residente,</p>
@@ -2949,13 +2976,15 @@ app.post("/notificarMotivo", async (req, res) => {
       <p><strong>Detalles del Visitante:</strong></p>
       <ul>
         <li><strong>Nombre:</strong> ${nombreVisitante}</li>
-        <li><strong>DNI:</strong> ${dniVisitante}</li>
+        <li><strong>Nacionalidad:</strong> ${nacionalidad || 'No disponible'}</li>
+        ${documentoVisitante}
         <li><strong>Número de personas:</strong> ${numeroPersonas}</li>
       </ul>
       <p><strong>Detalles del Residente Asociado:</strong></p>
       <ul>
         <li><strong>Nombre:</strong> ${nombreResidente}</li>
-        <li><strong>DNI:</strong> ${dniResidente}</li>
+        <li><strong>Nacionalidad:</strong> ${nacionalidad || 'No disponible'}</li>
+        ${documentoResidente}
         <li><strong>Contacto:</strong> ${contacto}</li>
         <li><strong>Numero de casa:</strong> ${condominio}</li>
       </ul>
