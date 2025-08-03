@@ -1185,7 +1185,7 @@ app.post("/validateQR", async (req, res) => {
     if (visitanteResults.length === 0) {
       return res
         .status(400)
-        .json({ message: "Código QR cancelado por el suario" });
+        .json({ message: "Código QR cancelado por el Residente" });
     }
 
     const estadoQR = visitanteResults[0].ESTADO_QR;
