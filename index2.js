@@ -1094,7 +1094,7 @@ app.post("/registrar_visitas", async (req, res) => {
     // Obtener la información adicional del QR
     const [personaInfoResults] = await connection.query(
       `
-      SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION AS ID_CONDOMINIO
+      SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, p.NUM_CARNET_EXTRANJERO, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION AS ID_CONDOMINIO
       FROM TBL_PERSONAS p
       LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
       LEFT JOIN TBL_CONDOMINIOS d ON p.ID_CONDOMINIO = d.ID_CONDOMINIO
@@ -1113,6 +1113,10 @@ app.post("/registrar_visitas", async (req, res) => {
 
     if (isRecurrentVisitor) {
       qrData = {
+        Residente: personaInfo.NOMBRE_PERSONA,
+        DNI_Residente: personaInfo.DNI_PERSONA,
+        NUM_CARNET_EXTRANJERO_Residente: personaInfo.NUM_CARNET_EXTRANJERO,
+        Contacto: personaInfo.CONTACTO,
         ID_VISITANTE,
         Condominio: personaInfo.ID_CONDOMINIO,
         NOMBRE_VISITANTE,
@@ -1125,6 +1129,10 @@ app.post("/registrar_visitas", async (req, res) => {
       };
     } else {
       qrData = {
+        Residente: personaInfo.NOMBRE_PERSONA,
+        DNI_Residente: personaInfo.DNI_PERSONA,
+        NUM_CARNET_EXTRANJERO_Residente: personaInfo.NUM_CARNET_EXTRANJERO,
+        Contacto: personaInfo.CONTACTO,
         ID_VISITANTE,
         Condominio: personaInfo.ID_CONDOMINIO,
         NOMBRE_VISITANTE,
@@ -1160,7 +1168,6 @@ app.post("/registrar_visitas", async (req, res) => {
     }
   }
 });
-
 //Validar el QR por los eventos y validar se es cancelado
 app.post("/validateQR", async (req, res) => {
   // Desestructurar el ID_VISITANTE del cuerpo
@@ -2904,31 +2911,37 @@ app.post("/notificarMotivo", async (req, res) => {
   const {
     nombreResidente,
     dniResidente,
+    carnetExtranjeroResidente,
     contacto,
     condominio,
     nombreVisitante,
     dniVisitante,
+    carnetExtranjeroVisitante,
     numeroPersonas,
     motivo,
+    nacionalidadVisitante,
+    nacionalidadResidente,
   } = req.body;
+
+  // 1. Validaciones básicas
+  if (!nombreResidente || !nombreVisitante || !motivo) {
+    return res.status(400).json({ error: "Datos requeridos faltantes" });
+  }
 
   let connection;
   try {
     connection = await mysqlPool.getConnection();
-    // Obtener correos de administradores con ID_ROL en (1, 4)
-    const [adminEmailsResult] = await mysqlPool.query(
+
+    // 2. Obtener correos de administradores y del residente
+    const [adminEmailsResult] = await connection.query(
       "SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4)"
     );
     const adminEmails = adminEmailsResult.map((row) => row.EMAIL);
 
-    // Obtener el correo del residente por nombre
-    const [residentEmailResult] = await mysqlPool.query(
+    const [residentEmailResult] = await connection.query(
       "SELECT EMAIL FROM TBL_MS_USUARIO WHERE NOMBRE_USUARIO = ?",
       [nombreResidente]
     );
-    const fechaActual = moment
-      .tz("America/Tegucigalpa")
-      .format("DD-MM-YYYY HH:mm");
 
     const residentEmail = residentEmailResult.length
       ? residentEmailResult[0].EMAIL
@@ -2940,7 +2953,26 @@ app.post("/notificarMotivo", async (req, res) => {
         .json({ error: "No se encontró el correo del residente" });
     }
 
-    // Crear el contenido del correo
+    // 3. Determinar el documento del residente y del visitante
+    const esResidenteHondureno =
+      nacionalidadResidente &&
+      nacionalidadResidente.toLowerCase().includes("hondureña");
+    const docResidente = esResidenteHondureno
+      ? DNI: ${dniResidente || "No disponible"}
+      : Carnet Extranjero: ${carnetExtranjeroResidente || "No disponible"};
+
+    const esVisitanteHondureno =
+      nacionalidadVisitante &&
+      nacionalidadVisitante.toLowerCase().includes("hondureña");
+    const docVisitante = esVisitanteHondureno
+      ? DNI: ${dniVisitante || "No disponible"}
+      : Carnet Extranjero: ${carnetExtranjeroVisitante || "No disponible"};
+
+    const fechaActual = moment
+      .tz("America/Tegucigalpa")
+      .format("DD-MM-YYYY HH:mm");
+
+    // 4. Crear el contenido del correo dinámico
     const emailContent = `
       <p>Estimados Administradores y Residente,</p>
       <p>Por este medio les notificamos sobre un incidente relacionado con el comportamiento de una visita:</p>
@@ -2949,13 +2981,16 @@ app.post("/notificarMotivo", async (req, res) => {
       <p><strong>Detalles del Visitante:</strong></p>
       <ul>
         <li><strong>Nombre:</strong> ${nombreVisitante}</li>
-        <li><strong>DNI:</strong> ${dniVisitante}</li>
+        <li><strong>Nacionalidad:</strong> ${
+          nacionalidadVisitante || "No disponible"
+        }</li>
+        <li><strong>Documento:</strong> ${docVisitante}</li>
         <li><strong>Número de personas:</strong> ${numeroPersonas}</li>
       </ul>
       <p><strong>Detalles del Residente Asociado:</strong></p>
       <ul>
         <li><strong>Nombre:</strong> ${nombreResidente}</li>
-        <li><strong>DNI:</strong> ${dniResidente}</li>
+        <li><strong>Documento:</strong> ${docResidente}</li>
         <li><strong>Contacto:</strong> ${contacto}</li>
         <li><strong>Numero de casa:</strong> ${condominio}</li>
       </ul>
@@ -2964,7 +2999,7 @@ app.post("/notificarMotivo", async (req, res) => {
       <p>El equipo de administración de Villas Las Acacias</p>
     `;
 
-    // Opciones de envío
+    // 5. Opciones de envío y envío del correo
     const mailOptions = {
       from: "villalasacacias@villalasacacias.com",
       to: [...adminEmails, residentEmail],
@@ -2972,7 +3007,6 @@ app.post("/notificarMotivo", async (req, res) => {
       html: emailContent,
     };
 
-    // Enviar el correo
     transporter.sendMail(mailOptions, (err) => {
       if (err) {
         console.error("Error al enviar el correo:", err);
@@ -2986,7 +3020,7 @@ app.post("/notificarMotivo", async (req, res) => {
     res.status(500).json({ error: "Error interno del servidor" });
   } finally {
     if (connection) {
-      console.log("Conexion liberada");
+      console.log("Conexión liberada");
       connection.release();
     }
   }
