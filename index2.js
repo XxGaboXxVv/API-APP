@@ -2958,15 +2958,15 @@ app.post("/notificarMotivo", async (req, res) => {
       nacionalidadResidente &&
       nacionalidadResidente.toLowerCase().includes("hondureña");
     const docResidente = esResidenteHondureno
-      ? DNI: ${dniResidente || "No disponible"}
-      : Carnet Extranjero: ${carnetExtranjeroResidente || "No disponible"};
+      ? `DNI: ${dniResidente || "No disponible"}`
+      : `Carnet Extranjero: ${carnetExtranjeroResidente || "No disponible"}`;
 
     const esVisitanteHondureno =
       nacionalidadVisitante &&
       nacionalidadVisitante.toLowerCase().includes("hondureña");
     const docVisitante = esVisitanteHondureno
-      ? DNI: ${dniVisitante || "No disponible"}
-      : Carnet Extranjero: ${carnetExtranjeroVisitante || "No disponible"};
+      ? `DNI: ${dniVisitante || "No disponible"}`
+      : `Carnet Extranjero: ${carnetExtranjeroVisitante || "No disponible"}`;
 
     const fechaActual = moment
       .tz("America/Tegucigalpa")
