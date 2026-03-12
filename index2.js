@@ -1002,7 +1002,7 @@ app.post("/registrar_visitas", async (req, res) => {
     }
 
     const ID_PERSONA = personaResults[0].ID_PERSONA;
-
+    
     // Obtener el valor del parámetro con ID_PARAMETRO = QR_VENCIMIENTO
     const [parametroResults] = await connection.query(
       'SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = "QR_VENCIMIENTO"'
@@ -1023,7 +1023,7 @@ app.post("/registrar_visitas", async (req, res) => {
       FECHA_VENCIMIENTO,
       "DD-MM-YYYY HH:mm"
     ).format("YYYY-MM-DD HH:mm:ss");
-
+   
     let insertQuery, insertParams;
 
     if (isRecurrentVisitor) {
@@ -1042,6 +1042,7 @@ app.post("/registrar_visitas", async (req, res) => {
         fechaVencimiento,
       ];
     } else {
+      const fechaActual = moment().tz("America/Tegucigalpa");
       insertQuery =
         "INSERT INTO TBL_REGVISITAS (ID_PERSONA, NOMBRE_VISITANTE, ID_NACIONALIDAD, DNI_VISITANTE, NUM_CARNET_EXTRANJERO, NUM_PERSONAS, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
       insertParams = [
@@ -1052,7 +1053,7 @@ app.post("/registrar_visitas", async (req, res) => {
         CARNET_EXTRANJERO,
         NUM_PERSONAS,
         NUM_PLACA,
-        fechaCalculada,
+        fechaActual.format("YYYY-MM-DD HH:mm:ss"),
       ];
     }
 
@@ -1126,6 +1127,7 @@ app.post("/registrar_visitas", async (req, res) => {
         NUM_PERSONAS,
         NUM_PLACA,
         FECHA_VENCIMIENTO: fechaVencimiento,
+        ID_CONDOMINIO: personaInfo.ID_CONDOMINIO,
       };
     } else {
       qrData = {
@@ -1142,6 +1144,7 @@ app.post("/registrar_visitas", async (req, res) => {
         NUM_PERSONAS,
         NUM_PLACA,
         FECHA_HORA: fechaCalculada,
+        ID_CONDOMINIO: personaInfo.ID_CONDOMINIO,
       };
     }
 
@@ -1157,6 +1160,7 @@ app.post("/registrar_visitas", async (req, res) => {
         ? "Visitante recurrente registrado exitosamente"
         : "Visita registrada exitosamente",
       qrCode: qrUrl,
+      qrData: qrData,
     });
   } catch (error) {
     console.error("Error:", error);
