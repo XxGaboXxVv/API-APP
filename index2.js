@@ -3029,3 +3029,303 @@ app.post("/notificarMotivo", async (req, res) => {
     }
   }
 });
+// Actualizar fecha de vencimiento de visita recurrente
+app.post("/actualizarVencimientoRecurrente", async (req, res) => {
+  const { ID_VISITANTE, FECHA_VENCIMIENTO } = req.body;
+  if (!ID_VISITANTE || !FECHA_VENCIMIENTO) {
+    return res.status(400).json({ message: "ID_VISITANTE y FECHA_VENCIMIENTO son requeridos" });
+  }
+
+  const fechaVencimientoFormateada = moment(FECHA_VENCIMIENTO, "DD-MM-YYYY HH:mm").format("YYYY-MM-DD HH:mm:ss");
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    await connection.beginTransaction();
+
+    await connection.query(
+      "UPDATE TBL_VISITANTES_RECURRENTES SET FECHA_VENCIMIENTO = ? WHERE ID_VISITANTES_RECURRENTES = ?",
+      [fechaVencimientoFormateada, ID_VISITANTE]
+    );
+
+    await connection.query(
+      "UPDATE TBL_BITACORA_VISITA SET FECHA_VENCIMIENTO = ? WHERE ID_VISITANTES_RECURRENTES = ?",
+      [fechaVencimientoFormateada, ID_VISITANTE]
+    );
+
+    await connection.commit();
+    res.status(200).json({ message: "Fecha de vencimiento actualizada correctamente" });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error al actualizar vencimiento:", error);
+    res.status(500).json({ error: "Error en el servidor" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Convertir una visita única ("No recurrente") a "Recurrente"
+app.post("/convertirARecurrente", async (req, res) => {
+  const { ID_VISITANTE, FECHA_VENCIMIENTO } = req.body;
+  if (!ID_VISITANTE || !FECHA_VENCIMIENTO) {
+    return res.status(400).json({ message: "ID_VISITANTE y FECHA_VENCIMIENTO son requeridos" });
+  }
+
+  const fechaVencimientoFormateada = moment(FECHA_VENCIMIENTO, "DD-MM-YYYY HH:mm").format("YYYY-MM-DD HH:mm:ss");
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    await connection.beginTransaction();
+
+    // 1. Obtener datos de la visita original
+    const [visita] = await connection.query(
+      "SELECT * FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?",
+      [ID_VISITANTE]
+    );
+
+    if (visita.length === 0) {
+      return res.status(404).json({ error: "Visita no encontrada" });
+    }
+
+    const v = visita[0];
+
+    // 2. Insertar en TBL_VISITANTES_RECURRENTES
+    const [insertResult] = await connection.query(
+      "INSERT INTO TBL_VISITANTES_RECURRENTES (ID_PERSONA, NOMBRE_VISITANTE, ID_NACIONALIDAD, DNI_VISITANTE, NUM_CARNET_EXTRANJERO, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [v.ID_PERSONA, v.NOMBRE_VISITANTE, v.ID_NACIONALIDAD, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, v.NUM_PERSONAS, v.NUM_PLACA, v.FECHA_HORA, fechaVencimientoFormateada]
+    );
+
+    const ID_RECURRENTE = insertResult.insertId;
+
+    // 3. Actualizar Bitácora
+    await connection.query(
+      "UPDATE TBL_BITACORA_VISITA SET ID_VISITANTE = NULL, ID_VISITANTES_RECURRENTES = ?, FECHA_VENCIMIENTO = ? WHERE ID_VISITANTE = ?",
+      [ID_RECURRENTE, fechaVencimientoFormateada, ID_VISITANTE]
+    );
+
+    // 4. Eliminar de TBL_REGVISITAS
+    await connection.query(
+      "DELETE FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?",
+      [ID_VISITANTE]
+    );
+
+    await connection.commit();
+    res.status(200).json({ message: "Visita convertida a recurrente exitosamente", ID_RECURRENTE });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error al convertir a recurrente:", error);
+    res.status(500).json({ error: "Error en el servidor" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Obtener QR para una visita existente
+app.get("/obtenerQRVisita", async (req, res) => {
+  const { idVisitante, tipo } = req.query;
+  if (!idVisitante || !tipo) {
+    return res.status(400).json({ error: "idVisitante y tipo son requeridos" });
+  }
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    let query, idPersona;
+
+    if (tipo === "Recurrente") {
+      query = "SELECT * FROM TBL_VISITANTES_RECURRENTES WHERE ID_VISITANTES_RECURRENTES = ?";
+    } else {
+      query = "SELECT * FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?";
+    }
+
+    const [visitaRows] = await connection.query(query, [idVisitante]);
+    if (visitaRows.length === 0) {
+      return res.status(404).json({ error: "Visita no encontrada" });
+    }
+
+    const v = visitaRows[0];
+    idPersona = v.ID_PERSONA;
+
+    // Obtener info del residente
+    const [personaInfoResults] = await connection.query(
+      `SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, p.NUM_CARNET_EXTRANJERO, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION AS ID_CONDOMINIO
+       FROM TBL_PERSONAS p
+       LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
+       LEFT JOIN TBL_CONDOMINIOS d ON p.ID_CONDOMINIO = d.ID_CONDOMINIO
+       WHERE p.ID_PERSONA = ?`,
+      [idPersona]
+    );
+
+    if (personaInfoResults.length === 0) {
+      return res.status(404).json({ message: "Información del residente no encontrada" });
+    }
+
+    const p = personaInfoResults[0];
+    
+    // Obtener nacionalidad string
+    const [nac] = await connection.query("SELECT NOMBRE_NACIONALIDAD FROM TBL_NACIONALIDADES WHERE ID_NACIONALIDAD = ?", [v.ID_NACIONALIDAD]);
+    const nacionalidadStr = nac.length > 0 ? nac[0].NOMBRE_NACIONALIDAD : "N/A";
+
+    let qrData;
+    if (tipo === "Recurrente") {
+      qrData = {
+        Residente: p.NOMBRE_PERSONA,
+        DNI_Residente: p.DNI_PERSONA,
+        NUM_CARNET_EXTRANJERO_Residente: p.NUM_CARNET_EXTRANJERO,
+        Contacto: p.CONTACTO,
+        ID_VISITANTE: Number(idVisitante),
+        Condominio: p.ID_CONDOMINIO,
+        NOMBRE_VISITANTE: v.NOMBRE_VISITANTE,
+        NACIONALIDAD: nacionalidadStr,
+        DNI_VISITANTE: v.DNI_VISITANTE,
+        NUM_CARNET_EXTRANJERO: v.NUM_CARNET_EXTRANJERO,
+        NUM_PERSONAS: v.NUM_PERSONAS,
+        NUM_PLACA: v.NUM_PLACA,
+        FECHA_VENCIMIENTO: moment(v.FECHA_VENCIMIENTO).format("YYYY-MM-DD HH:mm:ss"),
+        ID_CONDOMINIO: p.ID_CONDOMINIO,
+      };
+    } else {
+       // Para no recurrentes, buscar la fecha calculada originalmente en bitacora
+       const [bitacora] = await connection.query("SELECT FECHA_VENCIMIENTO FROM TBL_BITACORA_VISITA WHERE ID_VISITANTE = ?", [idVisitante]);
+       const fechaVence = bitacora.length > 0 ? moment(bitacora[0].FECHA_VENCIMIENTO).format("YYYY-MM-DD HH:mm:ss") : moment(v.FECHA_HORA).add(24, 'hours').format("YYYY-MM-DD HH:mm:ss");
+
+       qrData = {
+        Residente: p.NOMBRE_PERSONA,
+        DNI_Residente: p.DNI_PERSONA,
+        NUM_CARNET_EXTRANJERO_Residente: p.NUM_CARNET_EXTRANJERO,
+        Contacto: p.CONTACTO,
+        ID_VISITANTE: Number(idVisitante),
+        Condominio: p.ID_CONDOMINIO,
+        NOMBRE_VISITANTE: v.NOMBRE_VISITANTE,
+        NACIONALIDAD: nacionalidadStr,
+        DNI_VISITANTE: v.DNI_VISITANTE,
+        NUM_CARNET_EXTRANJERO: v.NUM_CARNET_EXTRANJERO,
+        NUM_PERSONAS: v.NUM_PERSONAS,
+        NUM_PLACA: v.NUM_PLACA,
+        FECHA_HORA: fechaVence,
+        ID_CONDOMINIO: p.ID_CONDOMINIO,
+      };
+    }
+
+    const qrUrl = await new Promise((resolve, reject) => {
+      QRCode.toDataURL(JSON.stringify(qrData), (err, url) => {
+        if (err) return reject(err);
+        resolve(url);
+      });
+    });
+
+    res.status(200).json({
+      qrCode: qrUrl,
+      qrData: qrData,
+    });
+  } catch (error) {
+    console.error("Error al generar QR:", error);
+    res.status(500).json({ error: "Error en el servidor" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Duplicar una visita puntual para la fecha actual
+app.post("/duplicarVisitaPuntual", async (req, res) => {
+  const { ID_VISITANTE } = req.body;
+  if (!ID_VISITANTE) {
+    return res.status(400).json({ error: "ID_VISITANTE es requerido" });
+  }
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    await connection.beginTransaction();
+
+    // 1. Obtener datos de la visita original
+    const [visitaRows] = await connection.query(
+      "SELECT * FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?",
+      [ID_VISITANTE]
+    );
+
+    if (visitaRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Visita original no encontrada" });
+    }
+
+    const v = visitaRows[0];
+
+    // 2. Obtener parámetro de vencimiento
+    const [parametroResults] = await connection.query(
+      'SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = "QR_VENCIMIENTO"'
+    );
+    const horas = parametroResults.length > 0 ? parseInt(parametroResults[0].VALOR) : 24;
+    
+    const fechaActual = moment().tz("America/Tegucigalpa");
+    const fechaActualStr = fechaActual.format("YYYY-MM-DD HH:mm:ss");
+    const fechaVenceStr = fechaActual.clone().add(horas, "hours").format("YYYY-MM-DD HH:mm:ss");
+
+    // 3. Insertar nueva visita
+    const [insertResult] = await connection.query(
+      "INSERT INTO TBL_REGVISITAS (ID_PERSONA, NOMBRE_VISITANTE, ID_NACIONALIDAD, DNI_VISITANTE, NUM_CARNET_EXTRANJERO, NUM_PERSONAS, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [v.ID_PERSONA, v.NOMBRE_VISITANTE, v.ID_NACIONALIDAD, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, v.NUM_PERSONAS, v.NUM_PLACA, fechaActualStr]
+    );
+
+    const nuevoID = insertResult.insertId;
+
+    // 4. Insertar en Bitácora
+    await connection.query(
+      "INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTE, NUM_PERSONA, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?)",
+      [v.ID_PERSONA, nuevoID, v.NUM_PERSONAS, v.NUM_PLACA, fechaActualStr, fechaVenceStr]
+    );
+
+    // 5. Preparar datos para el QR
+    const [personaInfo] = await connection.query(
+      `SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, p.NUM_CARNET_EXTRANJERO, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION AS ID_CONDOMINIO
+       FROM TBL_PERSONAS p
+       LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
+       LEFT JOIN TBL_CONDOMINIOS d ON p.ID_CONDOMINIO = d.ID_CONDOMINIO
+       WHERE p.ID_PERSONA = ?`,
+      [v.ID_PERSONA]
+    );
+
+    const p = personaInfo[0];
+    const [nac] = await connection.query("SELECT NOMBRE_NACIONALIDAD FROM TBL_NACIONALIDADES WHERE ID_NACIONALIDAD = ?", [v.ID_NACIONALIDAD]);
+    const nacionalidadStr = nac.length > 0 ? nac[0].NOMBRE_NACIONALIDAD : "N/A";
+
+    const qrData = {
+      Residente: p.NOMBRE_PERSONA,
+      DNI_Residente: p.DNI_PERSONA,
+      NUM_CARNET_EXTRANJERO_Residente: p.NUM_CARNET_EXTRANJERO,
+      Contacto: p.CONTACTO,
+      ID_VISITANTE: nuevoID,
+      Condominio: p.ID_CONDOMINIO,
+      NOMBRE_VISITANTE: v.NOMBRE_VISITANTE,
+      NACIONALIDAD: nacionalidadStr,
+      DNI_VISITANTE: v.DNI_VISITANTE,
+      NUM_CARNET_EXTRANJERO: v.NUM_CARNET_EXTRANJERO,
+      NUM_PERSONAS: v.NUM_PERSONAS,
+      NUM_PLACA: v.NUM_PLACA,
+      FECHA_HORA: fechaVenceStr,
+      ID_CONDOMINIO: p.ID_CONDOMINIO,
+    };
+
+    const qrUrl = await new Promise((resolve, reject) => {
+      QRCode.toDataURL(JSON.stringify(qrData), (err, url) => {
+        if (err) return reject(err);
+        resolve(url);
+      });
+    });
+
+    await connection.commit();
+    res.status(200).json({
+      message: "Nueva visita registrada exitosamente",
+      qrCode: qrUrl,
+      qrData: qrData,
+    });
+
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error al duplicar visita:", error);
+    res.status(500).json({ error: "Error en el servidor" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
