@@ -3029,9 +3029,10 @@ app.post("/notificarMotivo", async (req, res) => {
     }
   }
 });
+
 // Actualizar fecha de vencimiento de visita recurrente
 app.post("/actualizarVencimientoRecurrente", async (req, res) => {
-  const { ID_VISITANTE, FECHA_VENCIMIENTO } = req.body;
+  const { ID_VISITANTE, FECHA_VENCIMIENTO, NUM_PERSONAS, NUM_PLACA } = req.body;
   if (!ID_VISITANTE || !FECHA_VENCIMIENTO) {
     return res.status(400).json({ message: "ID_VISITANTE y FECHA_VENCIMIENTO son requeridos" });
   }
@@ -3044,17 +3045,17 @@ app.post("/actualizarVencimientoRecurrente", async (req, res) => {
     await connection.beginTransaction();
 
     await connection.query(
-      "UPDATE TBL_VISITANTES_RECURRENTES SET FECHA_VENCIMIENTO = ? WHERE ID_VISITANTES_RECURRENTES = ?",
-      [fechaVencimientoFormateada, ID_VISITANTE]
+      "UPDATE TBL_VISITANTES_RECURRENTES SET FECHA_VENCIMIENTO = ?, NUM_PERSONAS = ?, NUM_PLACA = ? WHERE ID_VISITANTES_RECURRENTES = ?",
+      [fechaVencimientoFormateada, NUM_PERSONAS, NUM_PLACA, ID_VISITANTE]
     );
 
     await connection.query(
-      "UPDATE TBL_BITACORA_VISITA SET FECHA_VENCIMIENTO = ? WHERE ID_VISITANTES_RECURRENTES = ?",
-      [fechaVencimientoFormateada, ID_VISITANTE]
+      "UPDATE TBL_BITACORA_VISITA SET FECHA_VENCIMIENTO = ?, NUM_PERSONA = ?, NUM_PLACA = ? WHERE ID_VISITANTES_RECURRENTES = ?",
+      [fechaVencimientoFormateada, NUM_PERSONAS, NUM_PLACA, ID_VISITANTE]
     );
 
     await connection.commit();
-    res.status(200).json({ message: "Fecha de vencimiento actualizada correctamente" });
+    res.status(200).json({ message: "Visita recurrente actualizada correctamente" });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error al actualizar vencimiento:", error);
@@ -3066,7 +3067,7 @@ app.post("/actualizarVencimientoRecurrente", async (req, res) => {
 
 // Convertir una visita única ("No recurrente") a "Recurrente"
 app.post("/convertirARecurrente", async (req, res) => {
-  const { ID_VISITANTE, FECHA_VENCIMIENTO } = req.body;
+  const { ID_VISITANTE, FECHA_VENCIMIENTO, NUM_PERSONAS, NUM_PLACA } = req.body;
   if (!ID_VISITANTE || !FECHA_VENCIMIENTO) {
     return res.status(400).json({ message: "ID_VISITANTE y FECHA_VENCIMIENTO son requeridos" });
   }
@@ -3093,15 +3094,15 @@ app.post("/convertirARecurrente", async (req, res) => {
     // 2. Insertar en TBL_VISITANTES_RECURRENTES
     const [insertResult] = await connection.query(
       "INSERT INTO TBL_VISITANTES_RECURRENTES (ID_PERSONA, NOMBRE_VISITANTE, ID_NACIONALIDAD, DNI_VISITANTE, NUM_CARNET_EXTRANJERO, NUM_PERSONAS, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [v.ID_PERSONA, v.NOMBRE_VISITANTE, v.ID_NACIONALIDAD, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, v.NUM_PERSONAS, v.NUM_PLACA, v.FECHA_HORA, fechaVencimientoFormateada]
+      [v.ID_PERSONA, v.NOMBRE_VISITANTE, v.ID_NACIONALIDAD, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, NUM_PERSONAS || v.NUM_PERSONAS, NUM_PLACA || v.NUM_PLACA, v.FECHA_HORA, fechaVencimientoFormateada]
     );
 
     const ID_RECURRENTE = insertResult.insertId;
 
     // 3. Actualizar Bitácora
     await connection.query(
-      "UPDATE TBL_BITACORA_VISITA SET ID_VISITANTE = NULL, ID_VISITANTES_RECURRENTES = ?, FECHA_VENCIMIENTO = ? WHERE ID_VISITANTE = ?",
-      [ID_RECURRENTE, fechaVencimientoFormateada, ID_VISITANTE]
+      "UPDATE TBL_BITACORA_VISITA SET ID_VISITANTE = NULL, ID_VISITANTES_RECURRENTES = ?, FECHA_VENCIMIENTO = ?, NUM_PERSONA = ?, NUM_PLACA = ? WHERE ID_VISITANTE = ?",
+      [ID_RECURRENTE, fechaVencimientoFormateada, NUM_PERSONAS || v.NUM_PERSONAS, NUM_PLACA || v.NUM_PLACA, ID_VISITANTE]
     );
 
     // 4. Eliminar de TBL_REGVISITAS
@@ -3229,7 +3230,7 @@ app.get("/obtenerQRVisita", async (req, res) => {
 
 // Duplicar una visita puntual para la fecha actual
 app.post("/duplicarVisitaPuntual", async (req, res) => {
-  const { ID_VISITANTE } = req.body;
+  const { ID_VISITANTE, NUM_PERSONAS, NUM_PLACA } = req.body;
   if (!ID_VISITANTE) {
     return res.status(400).json({ error: "ID_VISITANTE es requerido" });
   }
@@ -3262,10 +3263,14 @@ app.post("/duplicarVisitaPuntual", async (req, res) => {
     const fechaActualStr = fechaActual.format("YYYY-MM-DD HH:mm:ss");
     const fechaVenceStr = fechaActual.clone().add(horas, "hours").format("YYYY-MM-DD HH:mm:ss");
 
+    // Use provided values or original ones
+    const finalNumPersons = NUM_PERSONAS || v.NUM_PERSONAS;
+    const finalNumPlaca = NUM_PLACA || v.NUM_PLACA;
+
     // 3. Insertar nueva visita
     const [insertResult] = await connection.query(
       "INSERT INTO TBL_REGVISITAS (ID_PERSONA, NOMBRE_VISITANTE, ID_NACIONALIDAD, DNI_VISITANTE, NUM_CARNET_EXTRANJERO, NUM_PERSONAS, NUM_PLACA, FECHA_HORA) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      [v.ID_PERSONA, v.NOMBRE_VISITANTE, v.ID_NACIONALIDAD, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, v.NUM_PERSONAS, v.NUM_PLACA, fechaActualStr]
+      [v.ID_PERSONA, v.NOMBRE_VISITANTE, v.ID_NACIONALIDAD, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, finalNumPersons, finalNumPlaca, fechaActualStr]
     );
 
     const nuevoID = insertResult.insertId;
@@ -3273,7 +3278,7 @@ app.post("/duplicarVisitaPuntual", async (req, res) => {
     // 4. Insertar en Bitácora
     await connection.query(
       "INSERT INTO TBL_BITACORA_VISITA (ID_PERSONA, ID_VISITANTE, NUM_PERSONA, NUM_PLACA, FECHA_HORA, FECHA_VENCIMIENTO) VALUES (?, ?, ?, ?, ?, ?)",
-      [v.ID_PERSONA, nuevoID, v.NUM_PERSONAS, v.NUM_PLACA, fechaActualStr, fechaVenceStr]
+      [v.ID_PERSONA, nuevoID, finalNumPersons, finalNumPlaca, fechaActualStr, fechaVenceStr]
     );
 
     // 5. Preparar datos para el QR
@@ -3301,8 +3306,8 @@ app.post("/duplicarVisitaPuntual", async (req, res) => {
       NACIONALIDAD: nacionalidadStr,
       DNI_VISITANTE: v.DNI_VISITANTE,
       NUM_CARNET_EXTRANJERO: v.NUM_CARNET_EXTRANJERO,
-      NUM_PERSONAS: v.NUM_PERSONAS,
-      NUM_PLACA: v.NUM_PLACA,
+      NUM_PERSONAS: finalNumPersons,
+      NUM_PLACA: finalNumPlaca,
       FECHA_HORA: fechaVenceStr,
       ID_CONDOMINIO: p.ID_CONDOMINIO,
     };
