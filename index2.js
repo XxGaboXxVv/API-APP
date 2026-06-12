@@ -1588,24 +1588,44 @@ app.post("/ocultar_anuncio", async (req, res) => {
 // Crear un endpoint para obtener los datos del perfil del usuario
 app.get("/perfil", async (req, res) => {
   const usuarioId = req.query.usuario_id;
-
-  const query = `
-    SELECT u.NOMBRE_USUARIO, u.EMAIL, u.ID_ROL, p.ID_PADRE 
-    FROM TBL_MS_USUARIO u
-    LEFT JOIN TBL_PERSONAS p ON u.NOMBRE_USUARIO = p.NOMBRE_PERSONA
-    WHERE u.ID_USUARIO = ?`;
-
   let connection;
   try {
     connection = await mysqlPool.getConnection();
-    const [results] = await connection.query(query, [usuarioId]);
 
-    if (results.length > 0) {
-      res.status(200).json(results[0]);
-    } else {
+    // 1. Obtener datos del usuario
+    const [userResults] = await connection.query(
+      "SELECT NOMBRE_USUARIO, EMAIL, ID_ROL FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?",
+      [usuarioId]
+    );
+
+    if (userResults.length === 0) {
       console.log(`Usuario con ID ${usuarioId} no encontrado`);
-      res.status(404).send("Usuario no encontrado");
+      return res.status(404).send("Usuario no encontrado");
     }
+
+    const user = userResults[0];
+
+    // 2. Obtener ID_PADRE del residente usando el NOMBRE_USUARIO
+    let idPadre = null;
+    try {
+      const [personaResults] = await connection.query(
+        "SELECT ID_PADRE FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?",
+        [user.NOMBRE_USUARIO]
+      );
+      if (personaResults.length > 0) {
+        idPadre = personaResults[0].ID_PADRE;
+      }
+    } catch (personaError) {
+      console.error("Error al obtener ID_PADRE de TBL_PERSONAS:", personaError);
+    }
+
+    // 3. Devolver los datos combinados
+    res.status(200).json({
+      NOMBRE_USUARIO: user.NOMBRE_USUARIO,
+      EMAIL: user.EMAIL,
+      ID_ROL: user.ID_ROL,
+      ID_PADRE: idPadre,
+    });
   } catch (error) {
     console.error("Error al obtener el perfil del usuario:", error);
     res.status(500).send("Error al obtener el perfil del usuario");
