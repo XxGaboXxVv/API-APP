@@ -1707,6 +1707,7 @@ SELECT
 //********** Consultar Visitas *********
 app.get("/consultar_visitas", async (req, res) => {
   const usuarioId = req.query.usuario_id;
+  const all = req.query.all === "true" || req.query.all === "1";
 
   let connection;
   try {
