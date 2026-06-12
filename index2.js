@@ -1590,9 +1590,10 @@ app.get("/perfil", async (req, res) => {
   const usuarioId = req.query.usuario_id;
 
   const query = `
-    SELECT NOMBRE_USUARIO, EMAIL, ID_ROL 
-    FROM TBL_MS_USUARIO 
-    WHERE ID_USUARIO = ?`;
+    SELECT u.NOMBRE_USUARIO, u.EMAIL, u.ID_ROL, p.ID_PADRE 
+    FROM TBL_MS_USUARIO u
+    LEFT JOIN TBL_PERSONAS p ON u.NOMBRE_USUARIO = p.NOMBRE_PERSONA
+    WHERE u.ID_USUARIO = ?`;
 
   let connection;
   try {
