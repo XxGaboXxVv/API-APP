@@ -1725,9 +1725,9 @@ app.get("/consultar_visitas", async (req, res) => {
 
     const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
 
-    // Obtener el ID_PERSONA de la tabla TBL_PERSONAS usando el nombreUsuario
+    // Obtener el ID_PERSONA y el ID_CONDOMINIO de la tabla TBL_PERSONAS usando el nombreUsuario
     const [personaResults] = await connection.query(
-      "SELECT ID_PERSONA FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?",
+      "SELECT ID_PERSONA, ID_CONDOMINIO FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?",
       [nombreUsuario]
     );
 
@@ -1736,30 +1736,60 @@ app.get("/consultar_visitas", async (req, res) => {
     }
 
     const ID_PERSONA = personaResults[0].ID_PERSONA;
+    const ID_CONDOMINIO = personaResults[0].ID_CONDOMINIO;
 
-    // Consultar los registros de visitas en TBL_REGVISITAS
-    const queryRegVisitas = `
-    SELECT ID_VISITANTE, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_CARNET_EXTRANJERO, NUM_PERSONAS, NUM_PLACA, 
-           DATE_FORMAT(FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
-           NULL AS FECHA_VENCIMIENTO, 
-           'No recurrente' AS TIPO
-    FROM TBL_REGVISITAS 
-    WHERE ID_PERSONA = ?`;
+    let queryRegVisitas, queryVisitantesRecurrentes, queryParams;
 
-    const queryVisitantesRecurrentes = `
-    SELECT ID_VISITANTES_RECURRENTES, NOMBRE_VISITANTE, DNI_VISITANTE, NUM_CARNET_EXTRANJERO, NUM_PERSONAS, NUM_PLACA, 
-           DATE_FORMAT(FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
-           DATE_FORMAT(FECHA_VENCIMIENTO, '%d/%m/%Y %H:%i') AS FECHA_VENCIMIENTO, 
-           'Recurrente' AS TIPO
-    FROM TBL_VISITANTES_RECURRENTES 
-    WHERE ID_PERSONA = ?`;
+    if (all) {
+      queryRegVisitas = `
+      SELECT v.ID_VISITANTE, v.NOMBRE_VISITANTE, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, v.NUM_PERSONAS, v.NUM_PLACA, 
+             DATE_FORMAT(v.FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
+             NULL AS FECHA_VENCIMIENTO, 
+             'No recurrente' AS TIPO,
+             p.NOMBRE_PERSONA AS CREADO_POR
+      FROM TBL_REGVISITAS v
+      JOIN TBL_PERSONAS p ON v.ID_PERSONA = p.ID_PERSONA
+      WHERE p.ID_CONDOMINIO = ?`;
 
-    const [regVisitasResults] = await connection.query(queryRegVisitas, [
-      ID_PERSONA,
-    ]);
+      queryVisitantesRecurrentes = `
+      SELECT v.ID_VISITANTES_RECURRENTES, v.NOMBRE_VISITANTE, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, v.NUM_PERSONAS, v.NUM_PLACA, 
+             DATE_FORMAT(v.FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
+             DATE_FORMAT(v.FECHA_VENCIMIENTO, '%d/%m/%Y %H:%i') AS FECHA_VENCIMIENTO, 
+             'Recurrente' AS TIPO,
+             p.NOMBRE_PERSONA AS CREADO_POR
+      FROM TBL_VISITANTES_RECURRENTES v
+      JOIN TBL_PERSONAS p ON v.ID_PERSONA = p.ID_PERSONA
+      WHERE p.ID_CONDOMINIO = ?`;
+
+      queryParams = [ID_CONDOMINIO];
+    } else {
+      queryRegVisitas = `
+      SELECT v.ID_VISITANTE, v.NOMBRE_VISITANTE, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, v.NUM_PERSONAS, v.NUM_PLACA, 
+             DATE_FORMAT(v.FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
+             NULL AS FECHA_VENCIMIENTO, 
+             'No recurrente' AS TIPO,
+             p.NOMBRE_PERSONA AS CREADO_POR
+      FROM TBL_REGVISITAS v
+      JOIN TBL_PERSONAS p ON v.ID_PERSONA = p.ID_PERSONA
+      WHERE v.ID_PERSONA = ?`;
+
+      queryVisitantesRecurrentes = `
+      SELECT v.ID_VISITANTES_RECURRENTES, v.NOMBRE_VISITANTE, v.DNI_VISITANTE, v.NUM_CARNET_EXTRANJERO, v.NUM_PERSONAS, v.NUM_PLACA, 
+             DATE_FORMAT(v.FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
+             DATE_FORMAT(v.FECHA_VENCIMIENTO, '%d/%m/%Y %H:%i') AS FECHA_VENCIMIENTO, 
+             'Recurrente' AS TIPO,
+             p.NOMBRE_PERSONA AS CREADO_POR
+      FROM TBL_VISITANTES_RECURRENTES v
+      JOIN TBL_PERSONAS p ON v.ID_PERSONA = p.ID_PERSONA
+      WHERE v.ID_PERSONA = ?`;
+
+      queryParams = [ID_PERSONA];
+    }
+
+    const [regVisitasResults] = await connection.query(queryRegVisitas, queryParams);
     const [visitantesRecurrentesResults] = await connection.query(
       queryVisitantesRecurrentes,
-      [ID_PERSONA]
+      queryParams
     );
 
     // Combinar los resultados de ambas consultas
