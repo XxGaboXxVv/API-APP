@@ -79,10 +79,13 @@ app.post("/login", async (req, res) => {
   try {
     connection = await mysqlPool.getConnection(); // Obtener conexión del pool
 
+    const cleanUsername = (username || "").trim();
+    const cleanPassword = (password || "").trim();
+
     // Consultar el usuario
     const [rows] = await connection.query(
-      "SELECT * FROM TBL_MS_USUARIO WHERE EMAIL = ?",
-      [username]
+      "SELECT * FROM TBL_MS_USUARIO WHERE LOWER(TRIM(EMAIL)) = LOWER(?) OR LOWER(TRIM(NOMBRE_USUARIO)) = LOWER(?)",
+      [cleanUsername, cleanUsername]
     );
 
     if (rows.length === 0) {
@@ -110,13 +113,13 @@ app.post("/login", async (req, res) => {
       case 5:
         return res.status(405).send("Usuario pendiente");
     }
-    const passwordIsValid = bcrypt.compareSync(password, user.CONTRASEÑA);
+    const passwordIsValid = bcrypt.compareSync(cleanPassword, user.CONTRASEÑA);
 
     if (!passwordIsValid) {
       connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
       await connection.query(
-        "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE EMAIL = ?",
-        [username]
+        "UPDATE TBL_MS_USUARIO SET INTENTOS_FALLIDOS = INTENTOS_FALLIDOS + 1 WHERE ID_USUARIO = ?",
+        [user.ID_USUARIO]
       );
 
       const [paramRows] = await connection.query(
@@ -128,8 +131,8 @@ app.post("/login", async (req, res) => {
       if (user.INTENTOS_FALLIDOS + 1 >= maxLoginAttempts + 1) {
         connection = await mysqlPool.getConnection(); // Obtener nueva conexión del pool
         await connection.query(
-          "UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 3 WHERE EMAIL = ?",
-          [username]
+          "UPDATE TBL_MS_USUARIO SET ID_ESTADO_USUARIO = 3 WHERE ID_USUARIO = ?",
+          [user.ID_USUARIO]
         );
 
         return res
@@ -143,8 +146,8 @@ app.post("/login", async (req, res) => {
         `UPDATE TBL_MS_USUARIO 
                   SET INTENTOS_FALLIDOS = 0, 
                   PRIMER_INGRESO = IF(PRIMER_INGRESO IS NULL, CONVERT_TZ(NOW(), @@session.time_zone, '-06:00'), PRIMER_INGRESO) 
-                  WHERE EMAIL = ?`,
-        [username]
+                  WHERE ID_USUARIO = ?`,
+        [user.ID_USUARIO]
       );
       if (user.CODIGO_2FA === 1) {
         // Generar y enviar código de verificación
@@ -154,13 +157,13 @@ app.post("/login", async (req, res) => {
           .toUpperCase(); // Código de 6 dígitos en mayúsculas
 
         await connection.query(
-          "UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = ? WHERE EMAIL = ?",
-          [verificationCode, username]
+          "UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = ? WHERE ID_USUARIO = ?",
+          [verificationCode, user.ID_USUARIO]
         );
 
         const mailOptions = {
           from: "villalasacacias@villalasacacias.com",
-          to: username,
+          to: user.EMAIL,
           subject: "Código de Verificación 2FA",
           html: `
                         <p>Estimado/a usuario/a,</p>
@@ -1292,20 +1295,65 @@ app.post("/consultarQR_detalles", async (req, res) => {
   } else {
     try {
       const parsed = typeof code === "string" ? JSON.parse(code) : code;
-      idVisitante = parsed.ID_VISITANTE;
-      tipo = parsed.FECHA_VENCIMIENTO ? "Recurrente" : "Normal";
+      if (parsed.ID_PAQUETE) {
+        idVisitante = parsed.ID_PAQUETE;
+        tipo = "Paquete";
+      } else {
+        idVisitante = parsed.ID_VISITANTE;
+        tipo = parsed.FECHA_VENCIMIENTO ? "Recurrente" : "Normal";
+      }
     } catch (e) {
       return res.status(400).json({ message: "Formato de codigo QR no valido" });
     }
   }
 
   if (!idVisitante) {
-    return res.status(400).json({ message: "No se pudo identificar la visita en el QR" });
+    return res.status(400).json({ message: "No se pudo identificar la visita o paquete en el QR" });
   }
 
   let connection;
   try {
     connection = await mysqlPool.getConnection();
+
+    if (tipo === "Paquete") {
+      const [paqueteRows] = await connection.query(
+        `SELECT p.*, per.NOMBRE_PERSONA AS RESIDENTE, per.DNI_PERSONA,
+                c.DESCRIPCION AS CONDOMINIO, u.EMAIL AS EMAIL_RESIDENTE
+         FROM TBL_REG_PAQUETES p
+         JOIN TBL_PERSONAS per ON p.ID_PERSONA = per.ID_PERSONA
+         LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
+         LEFT JOIN TBL_MS_USUARIO u ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = per.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
+         WHERE p.ID_PAQUETE = ?`,
+        [idVisitante]
+      );
+
+      if (paqueteRows.length === 0) {
+        return res.status(404).json({ message: "Paquete no encontrado en el sistema" });
+      }
+
+      const paq = paqueteRows[0];
+      const qrData = {
+        ID_PAQUETE: paq.ID_PAQUETE,
+        Empresa: paq.EMPRESA_REMITENTE,
+        TipoRemitente: paq.TIPO_REMITENTE,
+        Dimension: paq.DIMENSION,
+        Descripcion: paq.DESCRIPCION || "",
+        FechaEstimada: paq.FECHA_ESTIMADA_ENTREGA ? moment(paq.FECHA_ESTIMADA_ENTREGA).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A") : "",
+        Residente: paq.RESIDENTE,
+        Condominio: paq.CONDOMINIO || "N/A",
+        Estado: paq.ESTADO_PAQUETE,
+        EstadoFisico: paq.ESTADO_FISICO,
+        Observaciones: paq.OBSERVACIONES_GUARDIA,
+        FechaRecepcion: paq.FECHA_RECEPCION ? moment(paq.FECHA_RECEPCION).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A") : null,
+        UsuarioRecepcion: paq.USUARIO_RECEPCION,
+      };
+
+      return res.status(200).json({
+        tipo: "Paquete",
+        qrData: qrData,
+      });
+    }
+
     let query;
     if (tipo === "Recurrente") {
       query = "SELECT * FROM TBL_VISITANTES_RECURRENTES WHERE ID_VISITANTES_RECURRENTES = ?";
@@ -1764,13 +1812,24 @@ app.get("/perfil", async (req, res) => {
 
     // 2. Obtener ID_PADRE del residente usando el NOMBRE_USUARIO
     let idPadre = null;
+    let nombrePersona = user.NOMBRE_USUARIO;
+    let descripcionCondominio = "Villa Las Acacias";
     try {
       const [personaResults] = await connection.query(
-        "SELECT ID_PADRE FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?",
+        `SELECT p.ID_PADRE, p.NOMBRE_PERSONA, c.DESCRIPCION AS CONDOMINIO
+         FROM TBL_PERSONAS p
+         LEFT JOIN TBL_CONDOMINIOS c ON p.ID_CONDOMINIO = c.ID_CONDOMINIO
+         WHERE p.NOMBRE_PERSONA = ?`,
         [user.NOMBRE_USUARIO]
       );
       if (personaResults.length > 0) {
         idPadre = personaResults[0].ID_PADRE;
+        if (personaResults[0].NOMBRE_PERSONA) {
+          nombrePersona = personaResults[0].NOMBRE_PERSONA;
+        }
+        if (personaResults[0].CONDOMINIO) {
+          descripcionCondominio = personaResults[0].CONDOMINIO;
+        }
       }
     } catch (personaError) {
       console.error("Error al obtener ID_PADRE de TBL_PERSONAS:", personaError);
@@ -1779,6 +1838,9 @@ app.get("/perfil", async (req, res) => {
     // 3. Devolver los datos combinados
     res.status(200).json({
       NOMBRE_USUARIO: user.NOMBRE_USUARIO,
+      NOMBRE_PERSONA: nombrePersona,
+      CONDOMINIO: descripcionCondominio,
+      DESCRIPCION: descripcionCondominio,
       EMAIL: user.EMAIL,
       ID_ROL: user.ID_ROL,
       ID_PADRE: idPadre,
@@ -3549,3 +3611,590 @@ app.post("/duplicarVisitaPuntual", async (req, res) => {
     if (connection) connection.release();
   }
 });
+
+app.post("/registrar_paquete", async (req, res) => {
+  const {
+    usuarioId,
+    EMPRESA_REMITENTE,
+    TIPO_REMITENTE,
+    DIMENSION,
+    DESCRIPCION,
+    FECHA_ESTIMADA_ENTREGA,
+  } = req.body;
+
+  if (!usuarioId || !EMPRESA_REMITENTE || !DIMENSION || !FECHA_ESTIMADA_ENTREGA) {
+    return res.status(400).json({ error: "Campos requeridos incompletos" });
+  }
+
+  const dimensionRaw = String(DIMENSION).trim().toLowerCase();
+  const esPequeno = dimensionRaw.includes("peque");
+  const esMediano = dimensionRaw.includes("median");
+  if (!esPequeno && !esMediano) {
+    return res.status(400).json({ error: "La dimensión debe ser Pequeño o Mediano" });
+  }
+  const dimensionVal = esPequeno ? "Pequeño" : "Mediano";
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+
+    const [usuarioResults] = await connection.query(
+      "SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?",
+      [usuarioId]
+    );
+
+    if (usuarioResults.length === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    const [personaResults] = await connection.query(
+      `SELECT p.ID_PERSONA, p.NOMBRE_PERSONA, p.ID_CONDOMINIO, c.DESCRIPCION AS CONDOMINIO
+       FROM TBL_PERSONAS p
+       LEFT JOIN TBL_CONDOMINIOS c ON p.ID_CONDOMINIO = c.ID_CONDOMINIO
+       WHERE p.NOMBRE_PERSONA = ?`,
+      [nombreUsuario]
+    );
+
+    if (personaResults.length === 0) {
+      return res.status(404).json({ error: "Persona asociada no encontrada" });
+    }
+
+    const persona = personaResults[0];
+    const tipoRemitenteVal = TIPO_REMITENTE || "Mensajería";
+
+    let fechaEstimadaFormatted;
+    if (moment(FECHA_ESTIMADA_ENTREGA, "DD-MM-YYYY HH:mm", true).isValid()) {
+      fechaEstimadaFormatted = moment(FECHA_ESTIMADA_ENTREGA, "DD-MM-YYYY HH:mm").format("YYYY-MM-DD HH:mm:ss");
+    } else if (moment(FECHA_ESTIMADA_ENTREGA).isValid()) {
+      fechaEstimadaFormatted = moment(FECHA_ESTIMADA_ENTREGA).format("YYYY-MM-DD HH:mm:ss");
+    } else {
+      fechaEstimadaFormatted = moment().tz("America/Tegucigalpa").add(1, "day").format("YYYY-MM-DD HH:mm:ss");
+    }
+
+    const insertSql = `
+      INSERT INTO TBL_REG_PAQUETES (
+        ID_PERSONA, EMPRESA_REMITENTE, TIPO_REMITENTE, DIMENSION, DESCRIPCION, FECHA_ESTIMADA_ENTREGA, ESTADO_PAQUETE
+      ) VALUES (?, ?, ?, ?, ?, ?, 'Pendiente')
+    `;
+
+    const [insertResult] = await connection.query(insertSql, [
+      persona.ID_PERSONA,
+      EMPRESA_REMITENTE,
+      tipoRemitenteVal,
+      dimensionVal,
+      DESCRIPCION || "",
+      fechaEstimadaFormatted,
+    ]);
+
+    const idPaquete = insertResult.insertId;
+    const tokenQR = generarTokenSeguroQR(idPaquete, "Paquete");
+
+    await connection.query(
+      "UPDATE TBL_REG_PAQUETES SET TOKEN_QR = ? WHERE ID_PAQUETE = ?",
+      [tokenQR, idPaquete]
+    );
+
+    const qrUrl = await new Promise((resolve, reject) => {
+      QRCode.toDataURL(tokenQR, (err, url) => {
+        if (err) return reject(err);
+        resolve(url);
+      });
+    });
+
+    const qrData = {
+      ID_PAQUETE: idPaquete,
+      Empresa: EMPRESA_REMITENTE,
+      TipoRemitente: tipoRemitenteVal,
+      Dimension: dimensionVal,
+      Descripcion: DESCRIPCION || "",
+      FechaEstimada: fechaEstimadaFormatted,
+      Residente: persona.NOMBRE_PERSONA,
+      Condominio: persona.CONDOMINIO || "N/A",
+      Estado: "Pendiente",
+    };
+
+    res.status(201).json({
+      message: "Paquete registrado exitosamente",
+      idPaquete: idPaquete,
+      qrCode: qrUrl,
+      qrToken: tokenQR,
+      qrData: qrData,
+    });
+  } catch (error) {
+    console.error("Error al registrar paquete:", error);
+    res.status(500).json({ error: "Error en el servidor al registrar paquete" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.get("/consultar_paquetes", async (req, res) => {
+  const usuarioId = req.query.usuarioId;
+  const showAll = req.query.all === "true";
+
+  if (!usuarioId) {
+    return res.status(400).json({ error: "El usuarioId es requerido" });
+  }
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+
+    const [usuarioResults] = await connection.query(
+      "SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?",
+      [usuarioId]
+    );
+
+    if (usuarioResults.length === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    const [personaResults] = await connection.query(
+      "SELECT ID_PERSONA, ID_CONDOMINIO FROM TBL_PERSONAS WHERE NOMBRE_PERSONA = ?",
+      [nombreUsuario]
+    );
+
+    if (personaResults.length === 0) {
+      return res.status(404).json({ error: "Persona no encontrada" });
+    }
+
+    const idPersona = personaResults[0].ID_PERSONA;
+    const idCondominio = personaResults[0].ID_CONDOMINIO;
+
+    let selectSql = `
+      SELECT p.*, per.NOMBRE_PERSONA AS RESIDENTE, c.DESCRIPCION AS CONDOMINIO
+      FROM TBL_REG_PAQUETES p
+      JOIN TBL_PERSONAS per ON p.ID_PERSONA = per.ID_PERSONA
+      LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
+    `;
+    let selectParams = [];
+
+    if (showAll && idCondominio) {
+      selectSql += " WHERE per.ID_CONDOMINIO = ? ORDER BY p.ID_PAQUETE DESC";
+      selectParams.push(idCondominio);
+    } else {
+      selectSql += " WHERE p.ID_PERSONA = ? ORDER BY p.ID_PAQUETE DESC";
+      selectParams.push(idPersona);
+    }
+
+    const [paquetes] = await connection.query(selectSql, selectParams);
+
+    const paquetesConQR = await Promise.all(
+      paquetes.map(async (paquete) => {
+        let qrUrl = null;
+        let tokenQR = paquete.TOKEN_QR;
+
+        if (!tokenQR) {
+          tokenQR = generarTokenSeguroQR(paquete.ID_PAQUETE, "Paquete");
+          await connection.query(
+            "UPDATE TBL_REG_PAQUETES SET TOKEN_QR = ? WHERE ID_PAQUETE = ?",
+            [tokenQR, paquete.ID_PAQUETE]
+          );
+        }
+
+        try {
+          qrUrl = await new Promise((resolve, reject) => {
+            QRCode.toDataURL(tokenQR, (err, url) => {
+              if (err) return reject(err);
+              resolve(url);
+            });
+          });
+        } catch (e) {
+          qrUrl = null;
+        }
+
+        const qrData = {
+          ID_PAQUETE: paquete.ID_PAQUETE,
+          Empresa: paquete.EMPRESA_REMITENTE,
+          TipoRemitente: paquete.TIPO_REMITENTE,
+          Dimension: paquete.DIMENSION,
+          Descripcion: paquete.DESCRIPCION || "",
+          FechaEstimada: paquete.FECHA_ESTIMADA_ENTREGA,
+          Residente: paquete.RESIDENTE,
+          Condominio: paquete.CONDOMINIO || "N/A",
+          Estado: paquete.ESTADO_PAQUETE,
+          EstadoFisico: paquete.ESTADO_FISICO,
+          Observaciones: paquete.OBSERVACIONES_GUARDIA,
+          FechaRecepcion: paquete.FECHA_RECEPCION,
+        };
+
+        return {
+          ...paquete,
+          qrCode: qrUrl,
+          qrToken: tokenQR,
+          qrData: qrData,
+        };
+      })
+    );
+
+    res.status(200).json(paquetesConQR);
+  } catch (error) {
+    console.error("Error al consultar paquetes:", error);
+    res.status(500).json({ error: "Error en el servidor al consultar paquetes" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.post("/actualizar_paquete", async (req, res) => {
+  const {
+    ID_PAQUETE,
+    EMPRESA_REMITENTE,
+    TIPO_REMITENTE,
+    DIMENSION,
+    DESCRIPCION,
+    FECHA_ESTIMADA_ENTREGA,
+  } = req.body;
+
+  if (!ID_PAQUETE) {
+    return res.status(400).json({ error: "ID_PAQUETE es requerido" });
+  }
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+
+    const [rows] = await connection.query(
+      `SELECT p.*, per.NOMBRE_PERSONA, c.DESCRIPCION AS CONDOMINIO
+       FROM TBL_REG_PAQUETES p
+       JOIN TBL_PERSONAS per ON p.ID_PERSONA = per.ID_PERSONA
+       LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
+       WHERE p.ID_PAQUETE = ?`,
+      [ID_PAQUETE]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Paquete no encontrado" });
+    }
+
+    const paquete = rows[0];
+    if (paquete.ESTADO_PAQUETE !== "Pendiente") {
+      return res.status(400).json({ error: "Solo se pueden modificar paquetes en estado Pendiente" });
+    }
+
+    const nuevaEmpresa = EMPRESA_REMITENTE || paquete.EMPRESA_REMITENTE;
+    const nuevoTipo = TIPO_REMITENTE || paquete.TIPO_REMITENTE;
+    const nuevaDimension = DIMENSION || paquete.DIMENSION;
+    const nuevaDescripcion = DESCRIPCION !== undefined ? DESCRIPCION : paquete.DESCRIPCION;
+
+    let nuevaFecha;
+    if (FECHA_ESTIMADA_ENTREGA) {
+      if (moment(FECHA_ESTIMADA_ENTREGA, "DD-MM-YYYY HH:mm", true).isValid()) {
+        nuevaFecha = moment(FECHA_ESTIMADA_ENTREGA, "DD-MM-YYYY HH:mm").format("YYYY-MM-DD HH:mm:ss");
+      } else if (moment(FECHA_ESTIMADA_ENTREGA).isValid()) {
+        nuevaFecha = moment(FECHA_ESTIMADA_ENTREGA).format("YYYY-MM-DD HH:mm:ss");
+      } else {
+        nuevaFecha = paquete.FECHA_ESTIMADA_ENTREGA;
+      }
+    } else {
+      nuevaFecha = paquete.FECHA_ESTIMADA_ENTREGA;
+    }
+
+    const tokenQR = generarTokenSeguroQR(ID_PAQUETE, "Paquete");
+
+    await connection.query(
+      `UPDATE TBL_REG_PAQUETES SET
+        EMPRESA_REMITENTE = ?,
+        TIPO_REMITENTE = ?,
+        DIMENSION = ?,
+        DESCRIPCION = ?,
+        FECHA_ESTIMADA_ENTREGA = ?,
+        TOKEN_QR = ?
+       WHERE ID_PAQUETE = ?`,
+      [nuevaEmpresa, nuevoTipo, nuevaDimension, nuevaDescripcion, nuevaFecha, tokenQR, ID_PAQUETE]
+    );
+
+    const qrUrl = await new Promise((resolve, reject) => {
+      QRCode.toDataURL(tokenQR, (err, url) => {
+        if (err) return reject(err);
+        resolve(url);
+      });
+    });
+
+    const qrData = {
+      ID_PAQUETE: ID_PAQUETE,
+      Empresa: nuevaEmpresa,
+      TipoRemitente: nuevoTipo,
+      Dimension: nuevaDimension,
+      Descripcion: nuevaDescripcion,
+      FechaEstimada: nuevaFecha,
+      Residente: paquete.NOMBRE_PERSONA,
+      Condominio: paquete.CONDOMINIO || "N/A",
+      Estado: "Pendiente",
+    };
+
+    res.status(200).json({
+      message: "Paquete actualizado exitosamente",
+      qrCode: qrUrl,
+      qrToken: tokenQR,
+      qrData: qrData,
+    });
+  } catch (error) {
+    console.error("Error al actualizar paquete:", error);
+    res.status(500).json({ error: "Error en el servidor al actualizar paquete" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.post("/validar_paquete_qr", async (req, res) => {
+  const { token, idPaquete } = req.body;
+
+  let idBuscado = null;
+
+  if (token) {
+    if (typeof token === "string" && token.startsWith("VLA_SEC_")) {
+      const descifrado = descifrarTokenSeguroQR(token);
+      if (descifrado && descifrado.id) {
+        idBuscado = descifrado.id;
+      }
+    } else if (!isNaN(Number(token))) {
+      idBuscado = Number(token);
+    }
+  } else if (idPaquete) {
+    idBuscado = Number(idPaquete);
+  }
+
+  if (!idBuscado) {
+    return res.status(400).json({ error: "Código QR o token no reconocido" });
+  }
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+
+    const [rows] = await connection.query(
+      `SELECT p.*, per.NOMBRE_PERSONA AS RESIDENTE, per.DNI_PERSONA,
+              c.DESCRIPCION AS CONDOMINIO, u.EMAIL AS EMAIL_RESIDENTE
+       FROM TBL_REG_PAQUETES p
+       JOIN TBL_PERSONAS per ON p.ID_PERSONA = per.ID_PERSONA
+       LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
+       LEFT JOIN TBL_MS_USUARIO u ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = per.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
+       WHERE p.ID_PAQUETE = ?`,
+      [idBuscado]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Paquete no encontrado en el sistema" });
+    }
+
+    const p = rows[0];
+
+    res.status(200).json({
+      valido: true,
+      paquete: {
+        ID_PAQUETE: p.ID_PAQUETE,
+        EMPRESA_REMITENTE: p.EMPRESA_REMITENTE,
+        TIPO_REMITENTE: p.TIPO_REMITENTE,
+        DIMENSION: p.DIMENSION,
+        DESCRIPCION: p.DESCRIPCION,
+        FECHA_ESTIMADA_ENTREGA: p.FECHA_ESTIMADA_ENTREGA,
+        ESTADO_PAQUETE: p.ESTADO_PAQUETE,
+        ESTADO_FISICO: p.ESTADO_FISICO,
+        OBSERVACIONES_GUARDIA: p.OBSERVACIONES_GUARDIA,
+        FECHA_RECEPCION: p.FECHA_RECEPCION,
+        USUARIO_RECEPCION: p.USUARIO_RECEPCION,
+        RESIDENTE: p.RESIDENTE,
+        CONDOMINIO: p.CONDOMINIO,
+        DNI_PERSONA: p.DNI_PERSONA,
+        EMAIL_RESIDENTE: p.EMAIL_RESIDENTE,
+      },
+      puedeRecibir: p.ESTADO_PAQUETE === "Pendiente",
+    });
+  } catch (error) {
+    console.error("Error al validar QR de paquete:", error);
+    res.status(500).json({ error: "Error en el servidor al validar QR de paquete" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.post("/recibir_paquete", async (req, res) => {
+  const {
+    ID_PAQUETE,
+    ESTADO_FISICO,
+    OBSERVACIONES_GUARDIA,
+    USUARIO_RECEPCION,
+    ESTADO_PAQUETE,
+  } = req.body;
+
+  if (!ID_PAQUETE) {
+    return res.status(400).json({ error: "ID_PAQUETE es requerido" });
+  }
+
+  const estadoFinal = ESTADO_PAQUETE === "Rechazado" ? "Rechazado" : "Recibido";
+  const estadoFisicoVal = ESTADO_FISICO || "Intacto";
+  const observacionesVal = OBSERVACIONES_GUARDIA || "";
+  const usuarioRecepcionVal = USUARIO_RECEPCION || "Guardia de Caseta";
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+
+    const [rows] = await connection.query(
+      `SELECT p.*, per.NOMBRE_PERSONA, c.DESCRIPCION AS CONDOMINIO, u.EMAIL AS EMAIL_RESIDENTE
+       FROM TBL_REG_PAQUETES p
+       JOIN TBL_PERSONAS per ON p.ID_PERSONA = per.ID_PERSONA
+       LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
+       LEFT JOIN TBL_MS_USUARIO u ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = per.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
+       WHERE p.ID_PAQUETE = ?`,
+      [ID_PAQUETE]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Paquete no encontrado" });
+    }
+
+    const paquete = rows[0];
+    const fechaRecepcion = moment().tz("America/Tegucigalpa").format("YYYY-MM-DD HH:mm:ss");
+
+    await connection.query(
+      `UPDATE TBL_REG_PAQUETES SET
+        ESTADO_PAQUETE = ?,
+        ESTADO_FISICO = ?,
+        OBSERVACIONES_GUARDIA = ?,
+        FECHA_RECEPCION = ?,
+        USUARIO_RECEPCION = ?
+       WHERE ID_PAQUETE = ?`,
+      [estadoFinal, estadoFisicoVal, observacionesVal, fechaRecepcion, usuarioRecepcionVal, ID_PAQUETE]
+    );
+
+    const emailDestino = paquete.EMAIL_RESIDENTE;
+    if (emailDestino) {
+      try {
+        const esRechazado = estadoFinal === "Rechazado";
+        const asunto = esRechazado
+          ? "Villa Las Acacias - Notificación: Paquete Rechazado en Caseta"
+          : "Villa Las Acacias - Notificación: Paquete Recibido en Caseta";
+
+        const contenidoHtml = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
+            <div style="background-color: ${esRechazado ? "#d32f2f" : "#14A13B"}; color: white; padding: 20px; text-align: center;">
+              <h2 style="margin: 0;">Villa Las Acacias</h2>
+              <p style="margin: 5px 0 0 0; font-size: 14px;">Control de Seguridad y Acceso</p>
+            </div>
+            <div style="padding: 24px; background-color: #ffffff;">
+              <h3 style="color: #333333; margin-top: 0;">Estimado(a) ${paquete.NOMBRE_PERSONA},</h3>
+              <p style="color: #555555; line-height: 1.5;">
+                Le notificamos que se ha registrado la llegada de un paquete en la caseta de seguridad con los siguientes datos:
+              </p>
+              <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                <tr>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; font-weight: bold; color: #555;">Empresa / Remitente:</td>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; color: #333;">${paquete.EMPRESA_REMITENTE}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; font-weight: bold; color: #555;">Dimensión:</td>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; color: #333;">${paquete.DIMENSION}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; font-weight: bold; color: #555;">Casa / Condominio:</td>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; color: #333;">${paquete.CONDOMINIO || "N/A"}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; font-weight: bold; color: #555;">Estado:</td>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; color: ${esRechazado ? "#d32f2f" : "#14A13B"}; font-weight: bold;">${estadoFinal}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; font-weight: bold; color: #555;">Condición física:</td>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; color: #333; font-weight: bold;">${estadoFisicoVal}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; font-weight: bold; color: #555;">Observaciones:</td>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; color: #333;">${observacionesVal || "Sin observaciones adicionales"}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; font-weight: bold; color: #555;">Fecha y hora de registro:</td>
+                  <td style="padding: 8px; border-bottom: 1px solid #eeeeee; color: #333;">${fechaRecepcion}</td>
+                </tr>
+              </table>
+              <p style="color: #666666; font-size: 13px; line-height: 1.4;">
+                ${esRechazado
+                  ? "El paquete no fue recibido debido a las observaciones señaladas. Por favor consulte en caseta para más detalles."
+                  : "Puede retirar su paquete en la caseta de seguridad con el personal de guardia."}
+              </p>
+            </div>
+            <div style="background-color: #f7f7f7; color: #888888; padding: 12px; text-align: center; font-size: 12px;">
+              Villa Las Acacias &copy; ${new Date().getFullYear()}
+            </div>
+          </div>
+        `;
+
+        await transporter.sendMail({
+          from: '"Villa Las Acacias" <villalasacacias@villalasacacias.com>',
+          to: emailDestino,
+          subject: asunto,
+          html: contenidoHtml,
+        });
+      } catch (mailError) {
+        console.error("Error al enviar correo de notificación:", mailError);
+      }
+    }
+
+    res.status(200).json({
+      message: `Paquete registrado como ${estadoFinal} exitosamente`,
+      paqueteId: ID_PAQUETE,
+      estado: estadoFinal,
+      fechaRecepcion: fechaRecepcion,
+    });
+  } catch (error) {
+    console.error("Error al recibir paquete:", error);
+    res.status(500).json({ error: "Error en el servidor al registrar recepción de paquete" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.get("/reporte_paquetes", async (req, res) => {
+  const { condominio, fechaInicio, fechaFin, estado } = req.query;
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+
+    let querySql = `
+      SELECT p.*, per.NOMBRE_PERSONA AS RESIDENTE, per.DNI_PERSONA,
+             c.ID_CONDOMINIO, c.DESCRIPCION AS CONDOMINIO
+      FROM TBL_REG_PAQUETES p
+      JOIN TBL_PERSONAS per ON p.ID_PERSONA = per.ID_PERSONA
+      LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (condominio) {
+      querySql += " AND c.ID_CONDOMINIO = ?";
+      params.push(condominio);
+    }
+
+    if (estado) {
+      querySql += " AND p.ESTADO_PAQUETE = ?";
+      params.push(estado);
+    }
+
+    if (fechaInicio) {
+      querySql += " AND DATE(COALESCE(p.FECHA_RECEPCION, p.FECHA_ESTIMADA_ENTREGA)) >= ?";
+      params.push(fechaInicio);
+    }
+
+    if (fechaFin) {
+      querySql += " AND DATE(COALESCE(p.FECHA_RECEPCION, p.FECHA_ESTIMADA_ENTREGA)) <= ?";
+      params.push(fechaFin);
+    }
+
+    querySql += " ORDER BY p.ID_PAQUETE DESC";
+
+    const [rows] = await connection.query(querySql, params);
+    res.status(200).json(rows);
+  } catch (error) {
+    console.error("Error al obtener reporte de paquetes:", error);
+    res.status(500).json({ error: "Error en el servidor al generar reporte de paquetes" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
