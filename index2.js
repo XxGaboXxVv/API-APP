@@ -13,12 +13,44 @@ const SECRET_KEY = "your_secret_key"; // Cambia esto por una clave secreta segur
 const app = express();
 app.use(bp.json());
 
+const QR_CIPHER_KEY = crypto.scryptSync("VillaLasAcacias2026@SecuritySecret", "saltAcaciasQr", 32);
+
+function generarTokenSeguroQR(idVisitante, tipo) {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-cbc", QR_CIPHER_KEY, iv);
+  const payload = JSON.stringify({
+    id: idVisitante,
+    tipo: tipo,
+    ts: Date.now()
+  });
+  let encrypted = cipher.update(payload, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  return `VLA_SEC_${iv.toString("hex")}_${encrypted}`;
+}
+
+function descifrarTokenSeguroQR(token) {
+  if (!token || typeof token !== "string" || !token.startsWith("VLA_SEC_")) {
+    return null;
+  }
+  const parts = token.split("_");
+  if (parts.length !== 4) {
+    return null;
+  }
+  const iv = Buffer.from(parts[2], "hex");
+  const encryptedText = parts[3];
+  const decipher = crypto.createDecipheriv("aes-256-cbc", QR_CIPHER_KEY, iv);
+  let decrypted = decipher.update(encryptedText, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return JSON.parse(decrypted);
+}
+
+
 const mysqlPool = mysql.createPool({
-  host: "31.97.136.214",
-  user: "u569522830_codemasters408",
-  password: "Codem@sters123",
-  database: "lasacacias",
-  port: 3306,
+  host: "iriguchi.proxy.rlwy.net",
+  user: "root",
+  password: "pRbarXwePitmvYrCaRXuGtRKmoJGFhQJ",
+  database: "railway",
+  port: 19233,
   waitForConnections: true, // Espera si se supera el límite
   connectionLimit: 40, // ✅ MÁXIM0 conexiones simultáneas
   queueLimit: 0, // Sin límite en cola de espera
@@ -1148,8 +1180,10 @@ app.post("/registrar_visitas", async (req, res) => {
       };
     }
 
+    const tokenQR = generarTokenSeguroQR(ID_VISITANTE, isRecurrentVisitor ? "Recurrente" : "Normal");
+
     const qrUrl = await new Promise((resolve, reject) => {
-      QRCode.toDataURL(JSON.stringify(qrData), (err, url) => {
+      QRCode.toDataURL(tokenQR, (err, url) => {
         if (err) return reject(err);
         resolve(url);
       });
@@ -1161,6 +1195,7 @@ app.post("/registrar_visitas", async (req, res) => {
         : "Visita registrada exitosamente",
       qrCode: qrUrl,
       qrData: qrData,
+      qrToken: tokenQR,
     });
   } catch (error) {
     console.error("Error:", error);
@@ -1233,6 +1268,128 @@ app.post("/validateQR", async (req, res) => {
     }
   }
 });
+
+app.post("/consultarQR_detalles", async (req, res) => {
+  const { code } = req.body;
+  if (!code) {
+    return res.status(400).json({ message: "Codigo QR no proporcionado" });
+  }
+
+  let idVisitante;
+  let tipo = "Normal";
+
+  if (typeof code === "string" && code.startsWith("VLA_SEC_")) {
+    try {
+      const descifrado = descifrarTokenSeguroQR(code);
+      if (!descifrado || !descifrado.id) {
+        return res.status(400).json({ message: "Codigo QR invalido o alterado" });
+      }
+      idVisitante = descifrado.id;
+      tipo = descifrado.tipo || "Normal";
+    } catch (e) {
+      return res.status(400).json({ message: "Error al descifrar el codigo QR" });
+    }
+  } else {
+    try {
+      const parsed = typeof code === "string" ? JSON.parse(code) : code;
+      idVisitante = parsed.ID_VISITANTE;
+      tipo = parsed.FECHA_VENCIMIENTO ? "Recurrente" : "Normal";
+    } catch (e) {
+      return res.status(400).json({ message: "Formato de codigo QR no valido" });
+    }
+  }
+
+  if (!idVisitante) {
+    return res.status(400).json({ message: "No se pudo identificar la visita en el QR" });
+  }
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    let query;
+    if (tipo === "Recurrente") {
+      query = "SELECT * FROM TBL_VISITANTES_RECURRENTES WHERE ID_VISITANTES_RECURRENTES = ?";
+    } else {
+      query = "SELECT * FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?";
+    }
+
+    const [visitaRows] = await connection.query(query, [idVisitante]);
+    if (visitaRows.length === 0) {
+      return res.status(404).json({ message: "Visita no encontrada o cancelada" });
+    }
+
+    const v = visitaRows[0];
+    const idPersona = v.ID_PERSONA;
+
+    const [personaInfoResults] = await connection.query(
+      `SELECT p.NOMBRE_PERSONA, p.DNI_PERSONA, p.NUM_CARNET_EXTRANJERO, c.DESCRIPCION AS CONTACTO, d.DESCRIPCION AS ID_CONDOMINIO
+       FROM TBL_PERSONAS p
+       LEFT JOIN TBL_CONTACTOS c ON p.ID_CONTACTO = c.ID_CONTACTO
+       LEFT JOIN TBL_CONDOMINIOS d ON p.ID_CONDOMINIO = d.ID_CONDOMINIO
+       WHERE p.ID_PERSONA = ?`,
+      [idPersona]
+    );
+
+    if (personaInfoResults.length === 0) {
+      return res.status(404).json({ message: "Informacion del residente no encontrada" });
+    }
+
+    const p = personaInfoResults[0];
+    const [nac] = await connection.query("SELECT NOMBRE_NACIONALIDAD FROM TBL_NACIONALIDADES WHERE ID_NACIONALIDAD = ?", [v.ID_NACIONALIDAD]);
+    const nacionalidadStr = nac.length > 0 ? nac[0].NOMBRE_NACIONALIDAD : "N/A";
+
+    let qrData;
+    if (tipo === "Recurrente") {
+      qrData = {
+        Residente: p.NOMBRE_PERSONA,
+        DNI_Residente: p.DNI_PERSONA,
+        NUM_CARNET_EXTRANJERO_Residente: p.NUM_CARNET_EXTRANJERO,
+        Contacto: p.CONTACTO,
+        ID_VISITANTE: Number(idVisitante),
+        Condominio: p.ID_CONDOMINIO,
+        NOMBRE_VISITANTE: v.NOMBRE_VISITANTE,
+        NACIONALIDAD: nacionalidadStr,
+        DNI_VISITANTE: v.DNI_VISITANTE,
+        NUM_CARNET_EXTRANJERO: v.NUM_CARNET_EXTRANJERO,
+        NUM_PERSONAS: v.NUM_PERSONAS,
+        NUM_PLACA: v.NUM_PLACA,
+        FECHA_VENCIMIENTO: moment(v.FECHA_VENCIMIENTO).format("YYYY-MM-DD HH:mm:ss"),
+        ID_CONDOMINIO: p.ID_CONDOMINIO,
+      };
+    } else {
+      const [bitacora] = await connection.query("SELECT FECHA_VENCIMIENTO FROM TBL_BITACORA_VISITA WHERE ID_VISITANTE = ?", [idVisitante]);
+      const fechaVence = bitacora.length > 0 ? moment(bitacora[0].FECHA_VENCIMIENTO).format("YYYY-MM-DD HH:mm:ss") : moment(v.FECHA_HORA).add(24, 'hours').format("YYYY-MM-DD HH:mm:ss");
+
+      qrData = {
+        Residente: p.NOMBRE_PERSONA,
+        DNI_Residente: p.DNI_PERSONA,
+        NUM_CARNET_EXTRANJERO_Residente: p.NUM_CARNET_EXTRANJERO,
+        Contacto: p.CONTACTO,
+        ID_VISITANTE: Number(idVisitante),
+        Condominio: p.ID_CONDOMINIO,
+        NOMBRE_VISITANTE: v.NOMBRE_VISITANTE,
+        NACIONALIDAD: nacionalidadStr,
+        DNI_VISITANTE: v.DNI_VISITANTE,
+        NUM_CARNET_EXTRANJERO: v.NUM_CARNET_EXTRANJERO,
+        NUM_PERSONAS: v.NUM_PERSONAS,
+        NUM_PLACA: v.NUM_PLACA,
+        FECHA_HORA: fechaVence,
+        ID_CONDOMINIO: p.ID_CONDOMINIO,
+      };
+    }
+
+    return res.status(200).json({
+      tipo: tipo,
+      qrData: qrData,
+    });
+  } catch (error) {
+    console.error("Error al consultar detalles de QR:", error);
+    return res.status(500).json({ message: "Error interno al procesar el codigo QR" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 
 //Eliminar las visitas Recurrentes
 app.post("/eliminarVisitaRecurrentes", async (req, res) => {
@@ -3261,8 +3418,10 @@ app.get("/obtenerQRVisita", async (req, res) => {
       };
     }
 
+    const tokenQR = generarTokenSeguroQR(Number(idVisitante), tipo);
+
     const qrUrl = await new Promise((resolve, reject) => {
-      QRCode.toDataURL(JSON.stringify(qrData), (err, url) => {
+      QRCode.toDataURL(tokenQR, (err, url) => {
         if (err) return reject(err);
         resolve(url);
       });
@@ -3271,6 +3430,7 @@ app.get("/obtenerQRVisita", async (req, res) => {
     res.status(200).json({
       qrCode: qrUrl,
       qrData: qrData,
+      qrToken: tokenQR,
     });
   } catch (error) {
     console.error("Error al generar QR:", error);
@@ -3364,8 +3524,10 @@ app.post("/duplicarVisitaPuntual", async (req, res) => {
       ID_CONDOMINIO: p.ID_CONDOMINIO,
     };
 
+    const tokenQR = generarTokenSeguroQR(nuevoID, "Normal");
+
     const qrUrl = await new Promise((resolve, reject) => {
-      QRCode.toDataURL(JSON.stringify(qrData), (err, url) => {
+      QRCode.toDataURL(tokenQR, (err, url) => {
         if (err) return reject(err);
         resolve(url);
       });
@@ -3376,6 +3538,7 @@ app.post("/duplicarVisitaPuntual", async (req, res) => {
       message: "Nueva visita registrada exitosamente",
       qrCode: qrUrl,
       qrData: qrData,
+      qrToken: tokenQR,
     });
 
   } catch (error) {
