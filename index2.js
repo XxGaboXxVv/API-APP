@@ -1059,6 +1059,7 @@ app.post("/registrar_visitas", async (req, res) => {
       "DD-MM-YYYY HH:mm"
     ).format("YYYY-MM-DD HH:mm:ss");
    
+    const numPersonasVal = NUM_PERSONAS ? parseInt(NUM_PERSONAS) : 1;
     let insertQuery, insertParams;
 
     if (isRecurrentVisitor) {
@@ -1071,7 +1072,7 @@ app.post("/registrar_visitas", async (req, res) => {
         ID_NACIONALIDAD,
         DNI_VISITANTE,
         CARNET_EXTRANJERO,
-        NUM_PERSONAS,
+        numPersonasVal,
         NUM_PLACA,
         fechaActual.format("YYYY-MM-DD HH:mm:ss"),
         fechaVencimiento,
@@ -1086,7 +1087,7 @@ app.post("/registrar_visitas", async (req, res) => {
         ID_NACIONALIDAD,
         DNI_VISITANTE,
         CARNET_EXTRANJERO,
-        NUM_PERSONAS,
+        numPersonasVal,
         NUM_PLACA,
         fechaActual.format("YYYY-MM-DD HH:mm:ss"),
       ];
@@ -1106,7 +1107,7 @@ app.post("/registrar_visitas", async (req, res) => {
       insertBitacoraParams = [
         ID_PERSONA,
         ID_VISITANTE,
-        NUM_PERSONAS,
+        numPersonasVal,
         NUM_PLACA,
         fechaActual.format("YYYY-MM-DD HH:mm:ss"),
         fechaVencimiento,
@@ -1118,7 +1119,7 @@ app.post("/registrar_visitas", async (req, res) => {
       insertBitacoraParams = [
         ID_PERSONA,
         ID_VISITANTE,
-        NUM_PERSONAS,
+        numPersonasVal,
         NUM_PLACA,
         fechaActual.format("YYYY-MM-DD HH:mm:ss"),
         fechaCalculada,
@@ -1227,14 +1228,15 @@ app.post("/validateQR", async (req, res) => {
     connection = await mysqlPool.getConnection();
     // Verificar si el visitante existe en la base de datos
     const [visitanteResults] = await connection.query(
-      "SELECT ESTADO_QR FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?",
+      "SELECT ESTADO_QR, ESTADO, MOTIVO_CANCELACION FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?",
       [ID_VISITANTE]
     );
 
-    if (visitanteResults.length === 0) {
+    if (visitanteResults.length === 0 || visitanteResults[0].ESTADO === 'Cancelado') {
+      const motivo = visitanteResults.length > 0 && visitanteResults[0].MOTIVO_CANCELACION ? ` Motivo: ${visitanteResults[0].MOTIVO_CANCELACION}` : '';
       return res
         .status(400)
-        .json({ message: "Código QR cancelado por el Residente" });
+        .json({ message: `Código QR cancelado por el Residente.${motivo}` });
     }
 
     const estadoQR = visitanteResults[0].ESTADO_QR;
@@ -1354,6 +1356,86 @@ app.post("/consultarQR_detalles", async (req, res) => {
       });
     }
 
+    if (tipo === "Multiple") {
+      const [eventoRows] = await connection.query(
+        `SELECT e.*, per.NOMBRE_PERSONA AS RESIDENTE, per.DNI_PERSONA,
+                c.DESCRIPCION AS CONDOMINIO, u.EMAIL AS EMAIL_RESIDENTE
+         FROM TBL_REG_VISITAS_MULTIPLES e
+         JOIN TBL_PERSONAS per ON e.ID_PERSONA = per.ID_PERSONA
+         LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
+         LEFT JOIN TBL_MS_USUARIO u ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = per.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
+         WHERE e.ID_VISITA_MULTIPLE = ?`,
+        [idVisitante]
+      );
+
+      if (eventoRows.length === 0) {
+        return res.status(404).json({ message: "Pase de visita múltiple no encontrado o cancelado" });
+      }
+
+      const ev = eventoRows[0];
+      if (ev.ESTADO === 'Cancelado') {
+        const motivo = ev.MOTIVO_CANCELACION ? ` Motivo: ${ev.MOTIVO_CANCELACION}` : '';
+        return res.status(400).json({ message: `Este pase de visitas múltiples ha sido cancelado por el residente.${motivo}` });
+      }
+      const [visitantesRows] = await connection.query(
+        `SELECT ID_DETALLE, ID_VISITA_MULTIPLE, NOMBRE_VISITANTE, DOCUMENTO,
+                ESTADO_INGRESO, FECHA_INGRESO, OBSERVACIONES_GUARDIA, USUARIO_GUARDIA
+         FROM TBL_DETALLE_VISITAS_MULTIPLES
+         WHERE ID_VISITA_MULTIPLE = ?
+         ORDER BY ID_DETALLE ASC`,
+        [idVisitante]
+      );
+
+      const fechaHoy = moment().tz("America/Tegucigalpa").format("YYYY-MM-DD");
+      const fechaEventoDia = moment(ev.FECHA_EVENTO).tz("America/Tegucigalpa").format("YYYY-MM-DD");
+      const esFechaValida = (fechaHoy === fechaEventoDia);
+      const yaVencido = moment().tz("America/Tegucigalpa").isAfter(moment(ev.FECHA_VENCIMIENTO));
+
+      const visitantesFormateados = visitantesRows.map((v) => {
+        let estadoIngreso = v.ESTADO_INGRESO || "Pendiente";
+        if (ev.ESTADO === "Cancelado" && estadoIngreso !== "Ingresado") {
+          estadoIngreso = "Cancelado";
+        } else if (estadoIngreso === "Pendiente" && yaVencido) {
+          estadoIngreso = "No se presentó";
+        }
+        return {
+          ID_DETALLE: v.ID_DETALLE,
+          NombreCompleto: v.NOMBRE_VISITANTE,
+          Documento: v.DOCUMENTO || "",
+          EstadoIngreso: estadoIngreso,
+          FechaIngreso: v.FECHA_INGRESO ? moment(v.FECHA_INGRESO).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A") : null,
+          ObservacionesGuardia: v.OBSERVACIONES_GUARDIA || "",
+          UsuarioGuardia: v.USUARIO_GUARDIA || "",
+        };
+      });
+
+      const totalInvitados = visitantesFormateados.length;
+      const totalIngresados = visitantesFormateados.filter((v) => v.EstadoIngreso === "Ingresado").length;
+
+      const qrData = {
+        ID_VISITA_MULTIPLE: ev.ID_VISITA_MULTIPLE,
+        TituloEvento: ev.TITULO_EVENTO,
+        ObservacionesResidente: ev.OBSERVACIONES_RESIDENTE || "",
+        FechaEvento: moment(ev.FECHA_EVENTO).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A"),
+        FechaEventoCorta: moment(ev.FECHA_EVENTO).tz("America/Tegucigalpa").format("DD/MM/YYYY"),
+        FechaVencimiento: moment(ev.FECHA_VENCIMIENTO).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A"),
+        Residente: ev.RESIDENTE,
+        Condominio: ev.CONDOMINIO || "N/A",
+        Estado: ev.ESTADO,
+        MotivoCancelacion: ev.MOTIVO_CANCELACION || "",
+        EsFechaValida: esFechaValida,
+        YaVencido: yaVencido,
+        TotalInvitados: totalInvitados,
+        TotalIngresados: totalIngresados,
+        Visitantes: visitantesFormateados,
+      };
+
+      return res.status(200).json({
+        tipo: "Multiple",
+        qrData: qrData,
+      });
+    }
+
     let query;
     if (tipo === "Recurrente") {
       query = "SELECT * FROM TBL_VISITANTES_RECURRENTES WHERE ID_VISITANTES_RECURRENTES = ?";
@@ -1367,6 +1449,10 @@ app.post("/consultarQR_detalles", async (req, res) => {
     }
 
     const v = visitaRows[0];
+    if (v.ESTADO === 'Cancelado') {
+      const motivo = v.MOTIVO_CANCELACION ? ` Motivo: ${v.MOTIVO_CANCELACION}` : '';
+      return res.status(400).json({ message: `Esta visita ha sido cancelada por el residente.${motivo}` });
+    }
     const idPersona = v.ID_PERSONA;
 
     const [personaInfoResults] = await connection.query(
@@ -1441,8 +1527,8 @@ app.post("/consultarQR_detalles", async (req, res) => {
 
 //Eliminar las visitas Recurrentes
 app.post("/eliminarVisitaRecurrentes", async (req, res) => {
-  const { ID_VISITANTE } = req.body;
-  console.log("Eliminando visita recurrente:", { ID_VISITANTE });
+  const { ID_VISITANTE, motivo } = req.body;
+  const motivoCancelacion = motivo || "Cancelado por el residente";
 
   if (!ID_VISITANTE) {
     return res.status(400).json({ message: "ID_VISITANTE es requerido" });
@@ -1452,39 +1538,35 @@ app.post("/eliminarVisitaRecurrentes", async (req, res) => {
     const connection = await mysqlPool.getConnection();
 
     try {
-      // Iniciar transacción
       await connection.beginTransaction();
 
-      // Eliminar de TBL_BITACORA_VISITA
       await connection.query(
-        "DELETE FROM TBL_BITACORA_VISITA WHERE ID_VISITANTES_RECURRENTES = ?",
-        [ID_VISITANTE]
+        "UPDATE TBL_BITACORA_VISITA SET ESTADO = 'Cancelado', MOTIVO_CANCELACION = ? WHERE ID_VISITANTES_RECURRENTES = ?",
+        [motivoCancelacion, ID_VISITANTE]
       );
 
-      // Eliminar de TBL_VISITANTES_RECURRENTES
-      const [deleteResult] = await connection.query(
-        "DELETE FROM TBL_VISITANTES_RECURRENTES WHERE ID_VISITANTES_RECURRENTES = ?",
-        [ID_VISITANTE]
+      const [updateResult] = await connection.query(
+        "UPDATE TBL_VISITANTES_RECURRENTES SET ESTADO = 'Cancelado', MOTIVO_CANCELACION = ? WHERE ID_VISITANTES_RECURRENTES = ?",
+        [motivoCancelacion, ID_VISITANTE]
       );
 
-      // Confirmar transacción
       await connection.commit();
       connection.release();
 
-      if (deleteResult.affectedRows === 0) {
+      if (updateResult.affectedRows === 0) {
         return res.status(404).json({ message: "Visitante no encontrado" });
       }
 
       return res
         .status(200)
-        .json({ message: "Visita recurrente eliminada exitosamente" });
+        .json({ message: "Visita recurrente cancelada exitosamente" });
     } catch (queryError) {
       await connection.rollback();
       connection.release();
       console.error("Error en transacción:", queryError);
       return res
         .status(500)
-        .json({ message: "Error eliminando visita recurrente" });
+        .json({ message: "Error cancelando visita recurrente" });
     }
   } catch (error) {
     console.error("Error conectando a la base de datos:", error);
@@ -1496,8 +1578,8 @@ app.post("/eliminarVisitaRecurrentes", async (req, res) => {
 
 //Eliminar visitas No recurrentes
 app.post("/eliminarVisitaNoRecurrentes", async (req, res) => {
-  const { ID_VISITANTE } = req.body;
-  console.log("Eliminando visita no recurrente:", { ID_VISITANTE });
+  const { ID_VISITANTE, motivo } = req.body;
+  const motivoCancelacion = motivo || "Cancelado por el residente";
 
   if (!ID_VISITANTE) {
     return res.status(400).json({ message: "ID_VISITANTE es requerido" });
@@ -1507,25 +1589,22 @@ app.post("/eliminarVisitaNoRecurrentes", async (req, res) => {
     const connection = await mysqlPool.getConnection();
 
     try {
-      // Iniciar transacción
       await connection.beginTransaction();
 
-      // Eliminar de TBL_BITACORA_VISITA (usando ID_VISITANTE)
       await connection.query(
-        "DELETE FROM TBL_BITACORA_VISITA WHERE ID_VISITANTE = ?",
-        [ID_VISITANTE]
+        "UPDATE TBL_BITACORA_VISITA SET ESTADO = 'Cancelado', MOTIVO_CANCELACION = ? WHERE ID_VISITANTE = ?",
+        [motivoCancelacion, ID_VISITANTE]
       );
 
-      // Eliminar de TBL_REGVISITAS
-      const [deleteResult] = await connection.query(
-        "DELETE FROM TBL_REGVISITAS  WHERE ID_VISITANTE = ?",
-        [ID_VISITANTE]
+      const [updateResult] = await connection.query(
+        "UPDATE TBL_REGVISITAS SET ESTADO = 'Cancelado', MOTIVO_CANCELACION = ? WHERE ID_VISITANTE = ?",
+        [motivoCancelacion, ID_VISITANTE]
       );
 
       await connection.commit();
       connection.release();
 
-      if (deleteResult.affectedRows === 0) {
+      if (updateResult.affectedRows === 0) {
         return res
           .status(404)
           .json({ message: "Visitante no recurrente no encontrado" });
@@ -1533,20 +1612,69 @@ app.post("/eliminarVisitaNoRecurrentes", async (req, res) => {
 
       return res
         .status(200)
-        .json({ message: "Visita no recurrente eliminada exitosamente" });
+        .json({ message: "Visita no recurrente cancelada exitosamente" });
     } catch (queryError) {
       await connection.rollback();
       connection.release();
       console.error("Error en transacción:", queryError);
       return res
         .status(500)
-        .json({ message: "Error eliminando visita no recurrente" });
+        .json({ message: "Error cancelando visita no recurrente" });
     }
   } catch (error) {
     console.error("Error conectando a la base de datos:", error);
     return res
       .status(500)
       .json({ message: "Error de conexión a la base de datos" });
+  }
+});
+
+app.post("/cancelarVisitaIndividual", async (req, res) => {
+  const { ID_VISITANTE, tipo, motivo } = req.body;
+  const motivoCancelacion = motivo || "Cancelado por el residente";
+
+  if (!ID_VISITANTE) {
+    return res.status(400).json({ message: "ID_VISITANTE es requerido" });
+  }
+
+  const isRecurrente = tipo === "Recurrente";
+  try {
+    const connection = await mysqlPool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      if (isRecurrente) {
+        await connection.query(
+          "UPDATE TBL_BITACORA_VISITA SET ESTADO = 'Cancelado', MOTIVO_CANCELACION = ? WHERE ID_VISITANTES_RECURRENTES = ?",
+          [motivoCancelacion, ID_VISITANTE]
+        );
+        await connection.query(
+          "UPDATE TBL_VISITANTES_RECURRENTES SET ESTADO = 'Cancelado', MOTIVO_CANCELACION = ? WHERE ID_VISITANTES_RECURRENTES = ?",
+          [motivoCancelacion, ID_VISITANTE]
+        );
+      } else {
+        await connection.query(
+          "UPDATE TBL_BITACORA_VISITA SET ESTADO = 'Cancelado', MOTIVO_CANCELACION = ? WHERE ID_VISITANTE = ?",
+          [motivoCancelacion, ID_VISITANTE]
+        );
+        await connection.query(
+          "UPDATE TBL_REGVISITAS SET ESTADO = 'Cancelado', MOTIVO_CANCELACION = ? WHERE ID_VISITANTE = ?",
+          [motivoCancelacion, ID_VISITANTE]
+        );
+      }
+
+      await connection.commit();
+      connection.release();
+
+      return res.status(200).json({ message: "Visita cancelada exitosamente" });
+    } catch (queryError) {
+      await connection.rollback();
+      connection.release();
+      return res.status(500).json({ message: "Error cancelando la visita" });
+    }
+  } catch (error) {
+    return res.status(500).json({ message: "Error de conexión a la base de datos" });
   }
 });
 
@@ -1567,14 +1695,15 @@ app.post("/validateQR_Recurrentes", async (req, res) => {
     connection = await mysqlPool.getConnection();
     // Verificar si el visitante existe en la base de datos
     const [visitanteResults] = await connection.query(
-      "SELECT ID_VISITANTES_RECURRENTES FROM TBL_VISITANTES_RECURRENTES WHERE ID_VISITANTES_RECURRENTES = ?",
+      "SELECT ID_VISITANTES_RECURRENTES, ESTADO, MOTIVO_CANCELACION FROM TBL_VISITANTES_RECURRENTES WHERE ID_VISITANTES_RECURRENTES = ?",
       [ID_VISITANTE]
     );
 
-    if (visitanteResults.length === 0) {
+    if (visitanteResults.length === 0 || visitanteResults[0].ESTADO === 'Cancelado') {
+      const motivo = visitanteResults.length > 0 && visitanteResults[0].MOTIVO_CANCELACION ? ` Motivo: ${visitanteResults[0].MOTIVO_CANCELACION}` : '';
       return res
         .status(400)
-        .json({ message: "Código QR cancelado por el Residente" });
+        .json({ message: `Código QR cancelado por el Residente.${motivo}` });
     }
 
     // Respuesta exitosa
@@ -1965,7 +2094,9 @@ app.get("/consultar_visitas", async (req, res) => {
              DATE_FORMAT(v.FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
              NULL AS FECHA_VENCIMIENTO, 
              'No recurrente' AS TIPO,
-             p.NOMBRE_PERSONA AS CREADO_POR
+             p.NOMBRE_PERSONA AS CREADO_POR,
+             COALESCE(v.ESTADO, 'Activo') AS ESTADO,
+             v.MOTIVO_CANCELACION
       FROM TBL_REGVISITAS v
       JOIN TBL_PERSONAS p ON v.ID_PERSONA = p.ID_PERSONA
       WHERE p.ID_CONDOMINIO = ?`;
@@ -1975,7 +2106,9 @@ app.get("/consultar_visitas", async (req, res) => {
              DATE_FORMAT(v.FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
              DATE_FORMAT(v.FECHA_VENCIMIENTO, '%d/%m/%Y %H:%i') AS FECHA_VENCIMIENTO, 
              'Recurrente' AS TIPO,
-             p.NOMBRE_PERSONA AS CREADO_POR
+             p.NOMBRE_PERSONA AS CREADO_POR,
+             COALESCE(v.ESTADO, 'Activo') AS ESTADO,
+             v.MOTIVO_CANCELACION
       FROM TBL_VISITANTES_RECURRENTES v
       JOIN TBL_PERSONAS p ON v.ID_PERSONA = p.ID_PERSONA
       WHERE p.ID_CONDOMINIO = ?`;
@@ -1987,7 +2120,9 @@ app.get("/consultar_visitas", async (req, res) => {
              DATE_FORMAT(v.FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
              NULL AS FECHA_VENCIMIENTO, 
              'No recurrente' AS TIPO,
-             p.NOMBRE_PERSONA AS CREADO_POR
+             p.NOMBRE_PERSONA AS CREADO_POR,
+             COALESCE(v.ESTADO, 'Activo') AS ESTADO,
+             v.MOTIVO_CANCELACION
       FROM TBL_REGVISITAS v
       JOIN TBL_PERSONAS p ON v.ID_PERSONA = p.ID_PERSONA
       WHERE v.ID_PERSONA = ?`;
@@ -1997,7 +2132,9 @@ app.get("/consultar_visitas", async (req, res) => {
              DATE_FORMAT(v.FECHA_HORA, '%d/%m/%Y %H:%i') AS FECHA_HORA, 
              DATE_FORMAT(v.FECHA_VENCIMIENTO, '%d/%m/%Y %H:%i') AS FECHA_VENCIMIENTO, 
              'Recurrente' AS TIPO,
-             p.NOMBRE_PERSONA AS CREADO_POR
+             p.NOMBRE_PERSONA AS CREADO_POR,
+             COALESCE(v.ESTADO, 'Activo') AS ESTADO,
+             v.MOTIVO_CANCELACION
       FROM TBL_VISITANTES_RECURRENTES v
       JOIN TBL_PERSONAS p ON v.ID_PERSONA = p.ID_PERSONA
       WHERE v.ID_PERSONA = ?`;
@@ -4193,6 +4330,529 @@ app.get("/reporte_paquetes", async (req, res) => {
   } catch (error) {
     console.error("Error al obtener reporte de paquetes:", error);
     res.status(500).json({ error: "Error en el servidor al generar reporte de paquetes" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.post("/registrar_visita_multiple", async (req, res) => {
+  const {
+    usuarioId,
+    TITULO_EVENTO,
+    OBSERVACIONES_RESIDENTE,
+    FECHA_EVENTO,
+    VISITANTES,
+  } = req.body;
+
+  if (!usuarioId || !TITULO_EVENTO || !FECHA_EVENTO || !Array.isArray(VISITANTES) || VISITANTES.length === 0) {
+    return res.status(400).json({ error: "Datos requeridos incompletos o lista de visitantes vacía" });
+  }
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    await connection.beginTransaction();
+
+    const [usuarioResults] = await connection.query(
+      "SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?",
+      [usuarioId]
+    );
+
+    if (usuarioResults.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    const [personaResults] = await connection.query(
+      "SELECT p.ID_PERSONA, p.NOMBRE_PERSONA, c.DESCRIPCION AS CONDOMINIO FROM TBL_PERSONAS p LEFT JOIN TBL_CONDOMINIOS c ON p.ID_CONDOMINIO = c.ID_CONDOMINIO WHERE p.NOMBRE_PERSONA = ?",
+      [nombreUsuario]
+    );
+
+    if (personaResults.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Persona no encontrada" });
+    }
+
+    const persona = personaResults[0];
+    const ID_PERSONA = persona.ID_PERSONA;
+
+    let fechaEventoObj;
+    if (moment(FECHA_EVENTO, "DD-MM-YYYY HH:mm", true).isValid()) {
+      fechaEventoObj = moment.tz(FECHA_EVENTO, "DD-MM-YYYY HH:mm", "America/Tegucigalpa");
+    } else {
+      fechaEventoObj = moment.tz(FECHA_EVENTO, "America/Tegucigalpa");
+    }
+
+    const fechaEventoStr = fechaEventoObj.format("YYYY-MM-DD HH:mm:ss");
+    const fechaVencimientoStr = fechaEventoObj.clone().endOf("day").format("YYYY-MM-DD 23:59:59");
+    const fechaCreacionStr = moment().tz("America/Tegucigalpa").format("YYYY-MM-DD HH:mm:ss");
+
+    const [insertHeaderResult] = await connection.query(
+      `INSERT INTO TBL_REG_VISITAS_MULTIPLES
+       (ID_PERSONA, TITULO_EVENTO, OBSERVACIONES_RESIDENTE, FECHA_EVENTO, FECHA_VENCIMIENTO, ESTADO, FECHA_CREACION)
+       VALUES (?, ?, ?, ?, ?, 'Activo', ?)`,
+      [ID_PERSONA, TITULO_EVENTO.trim(), OBSERVACIONES_RESIDENTE ? OBSERVACIONES_RESIDENTE.trim() : null, fechaEventoStr, fechaVencimientoStr, fechaCreacionStr]
+    );
+
+    const ID_VISITA_MULTIPLE = insertHeaderResult.insertId;
+
+    for (const v of VISITANTES) {
+      const nombre = (v.nombre || v.NOMBRE_VISITANTE || "").toString().trim();
+      const doc = v.documento || v.DOCUMENTO ? (v.documento || v.DOCUMENTO).toString().trim() : null;
+      if (nombre.length > 0) {
+        await connection.query(
+          `INSERT INTO TBL_DETALLE_VISITAS_MULTIPLES
+           (ID_VISITA_MULTIPLE, NOMBRE_VISITANTE, DOCUMENTO, ESTADO_INGRESO)
+           VALUES (?, ?, ?, 'Pendiente')`,
+          [ID_VISITA_MULTIPLE, nombre, doc]
+        );
+      }
+    }
+
+    const tokenQR = generarTokenSeguroQR(ID_VISITA_MULTIPLE, "Multiple");
+
+    await connection.query(
+      "UPDATE TBL_REG_VISITAS_MULTIPLES SET TOKEN_QR = ? WHERE ID_VISITA_MULTIPLE = ?",
+      [tokenQR, ID_VISITA_MULTIPLE]
+    );
+
+    await connection.commit();
+
+    const qrUrl = await new Promise((resolve, reject) => {
+      QRCode.toDataURL(tokenQR, (err, url) => {
+        if (err) return reject(err);
+        resolve(url);
+      });
+    });
+
+    const qrData = {
+      ID_VISITA_MULTIPLE: ID_VISITA_MULTIPLE,
+      TituloEvento: TITULO_EVENTO.trim(),
+      ObservacionesResidente: OBSERVACIONES_RESIDENTE ? OBSERVACIONES_RESIDENTE.trim() : "",
+      FechaEvento: moment(fechaEventoStr).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A"),
+      FechaVencimiento: moment(fechaVencimientoStr).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A"),
+      Residente: persona.NOMBRE_PERSONA,
+      Condominio: persona.CONDOMINIO || "N/A",
+      TotalInvitados: VISITANTES.length,
+      Estado: "Activo",
+    };
+
+    res.status(201).json({
+      message: "Visita múltiple registrada exitosamente",
+      qrCode: qrUrl,
+      qrToken: tokenQR,
+      qrData: qrData,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error al registrar visita múltiple:", error);
+    res.status(500).json({ error: "Error en el servidor al registrar visita múltiple" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.get("/mis_visitas_multiples/:usuarioId", async (req, res) => {
+  const { usuarioId } = req.params;
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+
+    const [usuarioResults] = await connection.query(
+      "SELECT NOMBRE_USUARIO FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?",
+      [usuarioId]
+    );
+
+    if (usuarioResults.length === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    const nombreUsuario = usuarioResults[0].NOMBRE_USUARIO;
+
+    const [personaResults] = await connection.query(
+      "SELECT ID_PERSONA, NOMBRE_PERSONA, c.DESCRIPCION AS CONDOMINIO FROM TBL_PERSONAS p LEFT JOIN TBL_CONDOMINIOS c ON p.ID_CONDOMINIO = c.ID_CONDOMINIO WHERE p.NOMBRE_PERSONA = ?",
+      [nombreUsuario]
+    );
+
+    if (personaResults.length === 0) {
+      return res.status(404).json({ error: "Persona no encontrada" });
+    }
+
+    const persona = personaResults[0];
+
+    const [eventos] = await connection.query(
+      `SELECT e.*, c.DESCRIPCION AS CONDOMINIO
+       FROM TBL_REG_VISITAS_MULTIPLES e
+       JOIN TBL_PERSONAS p ON e.ID_PERSONA = p.ID_PERSONA
+       LEFT JOIN TBL_CONDOMINIOS c ON p.ID_CONDOMINIO = c.ID_CONDOMINIO
+       WHERE e.ID_PERSONA = ?
+       ORDER BY e.FECHA_EVENTO DESC`,
+      [persona.ID_PERSONA]
+    );
+
+    const resultado = [];
+    for (const ev of eventos) {
+      const [visitantes] = await connection.query(
+        `SELECT ID_DETALLE, ID_VISITA_MULTIPLE, NOMBRE_VISITANTE, DOCUMENTO, ESTADO_INGRESO, FECHA_INGRESO, OBSERVACIONES_GUARDIA, USUARIO_GUARDIA
+         FROM TBL_DETALLE_VISITAS_MULTIPLES
+         WHERE ID_VISITA_MULTIPLE = ?
+         ORDER BY ID_DETALLE ASC`,
+        [ev.ID_VISITA_MULTIPLE]
+      );
+
+      let qrUrl = null;
+      if (ev.TOKEN_QR) {
+        qrUrl = await new Promise((resolve) => {
+          QRCode.toDataURL(ev.TOKEN_QR, (err, url) => {
+            if (err) return resolve(null);
+            resolve(url);
+          });
+        });
+      }
+
+      const yaVencido = moment().tz("America/Tegucigalpa").isAfter(moment(ev.FECHA_VENCIMIENTO));
+      const visitantesMapeados = visitantes.map((v) => {
+        let estado = v.ESTADO_INGRESO || "Pendiente";
+        if (ev.ESTADO === "Cancelado" && estado !== "Ingresado") {
+          estado = "Cancelado";
+        } else if (estado === "Pendiente" && yaVencido) {
+          estado = "No se presentó";
+        }
+        return {
+          ...v,
+          ESTADO_INGRESO: estado,
+        };
+      });
+
+      resultado.push({
+        ID_VISITA_MULTIPLE: ev.ID_VISITA_MULTIPLE,
+        TITULO_EVENTO: ev.TITULO_EVENTO,
+        OBSERVACIONES_RESIDENTE: ev.OBSERVACIONES_RESIDENTE,
+        FECHA_EVENTO: ev.FECHA_EVENTO,
+        FECHA_VENCIMIENTO: ev.FECHA_VENCIMIENTO,
+        ESTADO: ev.ESTADO,
+        TOKEN_QR: ev.TOKEN_QR,
+        qrCode: qrUrl,
+        CONDOMINIO: ev.CONDOMINIO,
+        RESIDENTE: persona.NOMBRE_PERSONA,
+        totalInvitados: visitantesMapeados.length,
+        totalIngresados: visitantesMapeados.filter((v) => v.ESTADO_INGRESO === "Ingresado").length,
+        visitantes: visitantesMapeados,
+      });
+    }
+
+    res.status(200).json(resultado);
+  } catch (error) {
+    console.error("Error al obtener visitas múltiples:", error);
+    res.status(500).json({ error: "Error en el servidor al obtener visitas múltiples" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.put("/actualizar_visita_multiple/:id", async (req, res) => {
+  const { id } = req.params;
+  const { TITULO_EVENTO, OBSERVACIONES_RESIDENTE, FECHA_EVENTO, VISITANTES } = req.body;
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    await connection.beginTransaction();
+
+    const [rows] = await connection.query(
+      "SELECT * FROM TBL_REG_VISITAS_MULTIPLES WHERE ID_VISITA_MULTIPLE = ?",
+      [id]
+    );
+
+    if (rows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Evento no encontrado" });
+    }
+
+    const ev = rows[0];
+    if (ev.ESTADO !== "Activo") {
+      await connection.rollback();
+      return res.status(400).json({ error: "Solo se pueden editar eventos activos" });
+    }
+
+    let fechaEventoStr = ev.FECHA_EVENTO;
+    let fechaVencimientoStr = ev.FECHA_VENCIMIENTO;
+    if (FECHA_EVENTO) {
+      let fechaEventoObj;
+      if (moment(FECHA_EVENTO, "DD-MM-YYYY HH:mm", true).isValid()) {
+        fechaEventoObj = moment.tz(FECHA_EVENTO, "DD-MM-YYYY HH:mm", "America/Tegucigalpa");
+      } else {
+        fechaEventoObj = moment.tz(FECHA_EVENTO, "America/Tegucigalpa");
+      }
+      fechaEventoStr = fechaEventoObj.format("YYYY-MM-DD HH:mm:ss");
+      fechaVencimientoStr = fechaEventoObj.clone().endOf("day").format("YYYY-MM-DD 23:59:59");
+    }
+
+    const nuevoTitulo = TITULO_EVENTO !== undefined ? TITULO_EVENTO.trim() : ev.TITULO_EVENTO;
+    const nuevasObs = OBSERVACIONES_RESIDENTE !== undefined ? (OBSERVACIONES_RESIDENTE ? OBSERVACIONES_RESIDENTE.trim() : null) : ev.OBSERVACIONES_RESIDENTE;
+
+    await connection.query(
+      `UPDATE TBL_REG_VISITAS_MULTIPLES
+       SET TITULO_EVENTO = ?, OBSERVACIONES_RESIDENTE = ?, FECHA_EVENTO = ?, FECHA_VENCIMIENTO = ?
+       WHERE ID_VISITA_MULTIPLE = ?`,
+      [nuevoTitulo, nuevasObs, fechaEventoStr, fechaVencimientoStr, id]
+    );
+
+    if (Array.isArray(VISITANTES)) {
+      const [ingresados] = await connection.query(
+        "SELECT ID_DETALLE FROM TBL_DETALLE_VISITAS_MULTIPLES WHERE ID_VISITA_MULTIPLE = ? AND ESTADO_INGRESO = 'Ingresado'",
+        [id]
+      );
+      const ingresadosIds = ingresados.map((r) => r.ID_DETALLE);
+
+      if (ingresadosIds.length > 0) {
+        await connection.query(
+          "DELETE FROM TBL_DETALLE_VISITAS_MULTIPLES WHERE ID_VISITA_MULTIPLE = ? AND ESTADO_INGRESO != 'Ingresado'",
+          [id]
+        );
+      } else {
+        await connection.query(
+          "DELETE FROM TBL_DETALLE_VISITAS_MULTIPLES WHERE ID_VISITA_MULTIPLE = ?",
+          [id]
+        );
+      }
+
+      for (const v of VISITANTES) {
+        if (v.ID_DETALLE && ingresadosIds.includes(v.ID_DETALLE)) {
+          continue;
+        }
+        const nombre = (v.nombre || v.NOMBRE_VISITANTE || "").toString().trim();
+        const doc = v.documento || v.DOCUMENTO ? (v.documento || v.DOCUMENTO).toString().trim() : null;
+        if (nombre.length > 0) {
+          await connection.query(
+            `INSERT INTO TBL_DETALLE_VISITAS_MULTIPLES
+             (ID_VISITA_MULTIPLE, NOMBRE_VISITANTE, DOCUMENTO, ESTADO_INGRESO)
+             VALUES (?, ?, ?, 'Pendiente')`,
+            [id, nombre, doc]
+          );
+        }
+      }
+    }
+
+    await connection.commit();
+
+    const qrUrl = await new Promise((resolve) => {
+      QRCode.toDataURL(ev.TOKEN_QR, (err, url) => {
+        if (err) return resolve(null);
+        resolve(url);
+      });
+    });
+
+    res.status(200).json({
+      message: "Visita múltiple actualizada exitosamente",
+      qrCode: qrUrl,
+      qrToken: ev.TOKEN_QR,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error al actualizar visita múltiple:", error);
+    res.status(500).json({ error: "Error en el servidor al actualizar visita múltiple" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.all("/cancelar_visita_multiple/:id", async (req, res) => {
+  if (req.method !== "DELETE" && req.method !== "POST") {
+    return res.status(405).send("Method Not Allowed");
+  }
+  const { id } = req.params;
+  const motivo = (req.body && req.body.motivo) || req.query.motivo || "Cancelado por el residente";
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    await connection.query(
+      "UPDATE TBL_REG_VISITAS_MULTIPLES SET ESTADO = 'Cancelado', MOTIVO_CANCELACION = ? WHERE ID_VISITA_MULTIPLE = ?",
+      [motivo, id]
+    );
+    res.status(200).json({ message: "Visita múltiple cancelada exitosamente" });
+  } catch (error) {
+    console.error("Error al cancelar visita múltiple:", error);
+    res.status(500).json({ error: "Error en el servidor al cancelar visita múltiple" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.post("/registrar_ingreso_multiple", async (req, res) => {
+  const { ID_VISITA_MULTIPLE, ID_DETALLES, OBSERVACIONES_GUARDIA, USUARIO_GUARDIA } = req.body;
+  if (!ID_VISITA_MULTIPLE || !Array.isArray(ID_DETALLES) || ID_DETALLES.length === 0) {
+    return res.status(400).json({ error: "Debe seleccionar al menos un visitante" });
+  }
+
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    await connection.beginTransaction();
+
+    const [eventoRows] = await connection.query(
+      `SELECT e.*, per.NOMBRE_PERSONA, c.DESCRIPCION AS CONDOMINIO, u.EMAIL AS EMAIL_RESIDENTE
+       FROM TBL_REG_VISITAS_MULTIPLES e
+       JOIN TBL_PERSONAS per ON e.ID_PERSONA = per.ID_PERSONA
+       LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
+       LEFT JOIN TBL_MS_USUARIO u ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = per.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
+       WHERE e.ID_VISITA_MULTIPLE = ?`,
+      [ID_VISITA_MULTIPLE]
+    );
+
+    if (eventoRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: "Visita múltiple no encontrada" });
+    }
+
+    const evento = eventoRows[0];
+    const fechaIngreso = moment().tz("America/Tegucigalpa").format("YYYY-MM-DD HH:mm:ss");
+    const obsGuardia = OBSERVACIONES_GUARDIA || "";
+    const usuGuardia = USUARIO_GUARDIA || "Guardia de Caseta";
+
+    const [visitantesActualizados] = await connection.query(
+      `SELECT NOMBRE_VISITANTE, DOCUMENTO FROM TBL_DETALLE_VISITAS_MULTIPLES
+       WHERE ID_DETALLE IN (?) AND ID_VISITA_MULTIPLE = ?`,
+      [ID_DETALLES, ID_VISITA_MULTIPLE]
+    );
+
+    await connection.query(
+      `UPDATE TBL_DETALLE_VISITAS_MULTIPLES
+       SET ESTADO_INGRESO = 'Ingresado',
+           FECHA_INGRESO = ?,
+           OBSERVACIONES_GUARDIA = ?,
+           USUARIO_GUARDIA = ?
+       WHERE ID_DETALLE IN (?) AND ID_VISITA_MULTIPLE = ?`,
+      [fechaIngreso, obsGuardia, usuGuardia, ID_DETALLES, ID_VISITA_MULTIPLE]
+    );
+
+    await connection.commit();
+
+    const emailDestino = evento.EMAIL_RESIDENTE;
+    if (emailDestino) {
+      try {
+        const listaNombresHtml = visitantesActualizados
+          .map((v) => `<li><strong>${v.NOMBRE_VISITANTE}</strong>${v.DOCUMENTO ? ` (Doc: ${v.DOCUMENTO})` : ""}</li>`)
+          .join("");
+
+        const contenidoHtml = `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
+            <div style="background-color: #14A13B; color: white; padding: 20px; text-align: center;">
+              <h2 style="margin: 0;">Villa Las Acacias</h2>
+              <p style="margin: 5px 0 0 0; font-size: 14px;">Control de Seguridad y Acceso - Visitas Múltiples</p>
+            </div>
+            <div style="padding: 24px; background-color: #ffffff;">
+              <p style="font-size: 16px; color: #333333; margin-top: 0;">Estimado(a) <strong>${evento.NOMBRE_PERSONA}</strong>,</p>
+              <p style="font-size: 14px; color: #555555; line-height: 1.5;">
+                Le informamos que han ingresado visitantes autorizados de su reunión <strong>"${evento.TITULO_EVENTO}"</strong>:
+              </p>
+              <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 14px; margin: 16px 0;">
+                <p style="margin: 0 0 8px 0; font-weight: bold; color: #1e293b;">Visitantes ingresados en caseta:</p>
+                <ul style="margin: 0; padding-left: 20px; color: #334155;">
+                  ${listaNombresHtml}
+                </ul>
+              </div>
+              <table style="width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 20px;">
+                <tr>
+                  <td style="padding: 8px 0; color: #777777; width: 140px;">Casa / Condominio:</td>
+                  <td style="padding: 8px 0; color: #333333; font-weight: bold;">${evento.CONDOMINIO || "N/A"}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #777777;">Fecha y Hora:</td>
+                  <td style="padding: 8px 0; color: #333333; font-weight: bold;">${moment(fechaIngreso).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A")}</td>
+                </tr>
+                ${obsGuardia ? `
+                <tr>
+                  <td style="padding: 8px 0; color: #777777;">Observaciones Guardia:</td>
+                  <td style="padding: 8px 0; color: #333333;">${obsGuardia}</td>
+                </tr>
+                ` : ""}
+                <tr>
+                  <td style="padding: 8px 0; color: #777777;">Registrado por:</td>
+                  <td style="padding: 8px 0; color: #333333;">${usuGuardia}</td>
+                </tr>
+              </table>
+            </div>
+            <div style="background-color: #f9f9f9; padding: 12px; text-align: center; font-size: 12px; color: #888888; border-top: 1px solid #eeeeee;">
+              Este es un mensaje automático del sistema de control de acceso de Villa Las Acacias.
+            </div>
+          </div>
+        `;
+
+        await transporter.sendMail({
+          from: "villalasacacias@villalasacacias.com",
+          to: emailDestino,
+          subject: `Villa Las Acacias - Notificación: Ingreso de Visita Múltiple (${evento.TITULO_EVENTO})`,
+          html: contenidoHtml,
+        });
+      } catch (mailErr) {
+        console.error("Error al enviar correo de visita múltiple:", mailErr);
+      }
+    }
+
+    res.status(200).json({
+      message: "Ingreso registrado exitosamente",
+      cantidadIngresados: ID_DETALLES.length,
+      fechaIngreso: fechaIngreso,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error al registrar ingreso de visita múltiple:", error);
+    res.status(500).json({ error: "Error en el servidor al registrar ingreso" });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+app.get("/reporte_visitas_multiples", async (req, res) => {
+  const { condominio, fechaInicio, fechaFin, estado } = req.query;
+  let connection;
+  try {
+    connection = await mysqlPool.getConnection();
+    let querySql = `
+      SELECT e.ID_VISITA_MULTIPLE, e.TITULO_EVENTO, e.OBSERVACIONES_RESIDENTE, e.FECHA_EVENTO,
+             e.FECHA_VENCIMIENTO, e.ESTADO AS ESTADO_EVENTO,
+             d.ID_DETALLE, d.NOMBRE_VISITANTE, d.DOCUMENTO, d.ESTADO_INGRESO, d.FECHA_INGRESO,
+             d.OBSERVACIONES_GUARDIA, d.USUARIO_GUARDIA,
+             per.NOMBRE_PERSONA AS RESIDENTE,
+             c.ID_CONDOMINIO, c.DESCRIPCION AS CONDOMINIO
+      FROM TBL_REG_VISITAS_MULTIPLES e
+      JOIN TBL_PERSONAS per ON e.ID_PERSONA = per.ID_PERSONA
+      LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
+      LEFT JOIN TBL_DETALLE_VISITAS_MULTIPLES d ON e.ID_VISITA_MULTIPLE = d.ID_VISITA_MULTIPLE
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (condominio) {
+      querySql += " AND c.ID_CONDOMINIO = ?";
+      params.push(condominio);
+    }
+
+    if (estado) {
+      querySql += " AND d.ESTADO_INGRESO = ?";
+      params.push(estado);
+    }
+
+    if (fechaInicio) {
+      querySql += " AND DATE(e.FECHA_EVENTO) >= ?";
+      params.push(fechaInicio);
+    }
+
+    if (fechaFin) {
+      querySql += " AND DATE(e.FECHA_EVENTO) <= ?";
+      params.push(fechaFin);
+    }
+
+    querySql += " ORDER BY c.DESCRIPCION ASC, e.FECHA_EVENTO DESC, d.ID_DETALLE ASC";
+
+    const [rows] = await connection.query(querySql, params);
+    res.status(200).json(rows);
+  } catch (error) {
+    console.error("Error al obtener reporte de visitas múltiples:", error);
+    res.status(500).json({ error: "Error en el servidor al generar reporte de visitas múltiples" });
   } finally {
     if (connection) connection.release();
   }
