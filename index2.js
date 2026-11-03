@@ -11,6 +11,7 @@ const { exit } = require("process");
 
 const SECRET_KEY = "your_secret_key"; // Cambia esto por una clave secreta segura
 const app = express();
+app.use(["/registrar_solicitud_admin", "/responder_solicitud_admin"], bp.json({ limit: "12mb" }));
 app.use(bp.json());
 
 const QR_CIPHER_KEY = crypto.scryptSync("VillaLasAcacias2026@SecuritySecret", "saltAcaciasQr", 32);
@@ -4858,3 +4859,478 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
   }
 });
 
+
+//*************** SOLICITUDES ADMINISTRATIVAS DE RESIDENTES ***************
+{
+  const ZONA = "America/Tegucigalpa";
+  const CORREO_REMITENTE = "villalasacacias@villalasacacias.com";
+
+  const ESTADO = {
+    RECIBIDA: 1,
+    EN_REVISION: 2,
+    PENDIENTE_INFORMACION: 3,
+  };
+  const CANAL_APP = 1;
+  const MAXIMO_ADJUNTOS = 3;
+  const TAMANO_MAXIMO_BYTES = 2 * 1024 * 1024;
+  const TIPOS_MIME_PERMITIDOS = ["image/jpeg", "image/png", "application/pdf"];
+
+  function ahora() {
+    return moment().tz(ZONA);
+  }
+
+  function calcularFechaLimite(desde, diasHabiles, feriados) {
+    const fecha = moment.tz(desde.format("YYYY-MM-DD"), "YYYY-MM-DD", ZONA);
+    let contados = 0;
+    while (contados < diasHabiles) {
+      fecha.add(1, "day");
+      const dia = fecha.isoWeekday();
+      if (dia >= 6 || feriados.includes(fecha.format("YYYY-MM-DD"))) {
+        continue;
+      }
+      contados++;
+    }
+    return fecha;
+  }
+
+  function numeroSeguimiento(idSolicitud, anio) {
+    return `SOL-${anio}-${String(idSolicitud).padStart(5, "0")}`;
+  }
+
+  function texto(valor) {
+    return typeof valor === "string" ? valor.trim() : "";
+  }
+
+  function escaparHtml(valor) {
+    return String(valor ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  class ErrorSolicitud extends Error {
+    constructor(status, mensaje) {
+      super(mensaje);
+      this.status = status;
+    }
+  }
+
+  // Detecta el tipo real del archivo por su contenido (firma / "magic bytes"),
+  // sin confiar en el MIME que envía el cliente.
+  function detectarMime(buffer) {
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+    if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+    if (buffer.length >= 5 && buffer.subarray(0, 5).toString("latin1") === "%PDF-") return "application/pdf";
+    return null;
+  }
+
+  function validarAdjuntos(adjuntos, yaGuardados) {
+    if (adjuntos === undefined || adjuntos === null) return [];
+    if (!Array.isArray(adjuntos)) throw new ErrorSolicitud(400, "Formato de adjuntos inválido");
+    if (adjuntos.length + yaGuardados > MAXIMO_ADJUNTOS) {
+      throw new ErrorSolicitud(400, `Solo se permiten ${MAXIMO_ADJUNTOS} adjuntos por solicitud`);
+    }
+    return adjuntos.map((adjunto) => {
+      const base64 = texto(adjunto && adjunto.base64);
+      if (!/^[A-Za-z0-9+/=]+$/.test(base64)) {
+        throw new ErrorSolicitud(400, "Adjunto dañado");
+      }
+      const contenido = Buffer.from(base64, "base64");
+      const mime = detectarMime(contenido);
+      if (!mime || !TIPOS_MIME_PERMITIDOS.includes(mime)) {
+        throw new ErrorSolicitud(400, "Solo se permiten imágenes JPG/PNG o PDF");
+      }
+      const bytes = contenido.length;
+      if (bytes === 0 || bytes > TAMANO_MAXIMO_BYTES) {
+        throw new ErrorSolicitud(400, "Cada adjunto debe pesar menos de 2 MB");
+      }
+      const nombre = (texto(adjunto.nombre) || "adjunto").replace(/[\\/:*?"<>|]/g, "_").slice(0, 255);
+      return { nombre, mime, base64, bytes };
+    });
+  }
+
+  function usuarioSolicitado(req) {
+    const valor = req.method === "GET" ? req.query.usuarioId : req.body && req.body.usuarioId;
+    const usuarioId = parseInt(valor, 10);
+    if (!Number.isInteger(usuarioId) || usuarioId <= 0) {
+      throw new ErrorSolicitud(400, "Se requiere usuarioId");
+    }
+    const encabezado = req.headers["authorization"];
+    if (encabezado && jwt && SECRET_KEY) {
+      const token = String(encabezado).replace(/^Bearer\s+/i, "");
+      try {
+        const decodificado = jwt.verify(token, SECRET_KEY);
+        if (decodificado && decodificado.id && Number(decodificado.id) !== usuarioId) {
+          throw new ErrorSolicitud(403, "El usuario no coincide con la sesión");
+        }
+      } catch (error) {
+        if (error instanceof ErrorSolicitud) throw error;
+      }
+    }
+    return usuarioId;
+  }
+
+  async function personaDelUsuario(connection, usuarioId) {
+    const [usuarios] = await connection.query(
+      "SELECT ID_USUARIO, NOMBRE_USUARIO, EMAIL FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?",
+      [usuarioId]
+    );
+    if (usuarios.length === 0) throw new ErrorSolicitud(404, "Usuario no encontrado");
+    const [personas] = await connection.query(
+      `SELECT p.ID_PERSONA, p.NOMBRE_PERSONA, p.ID_CONDOMINIO, p.ID_PADRE, c.DESCRIPCION AS CASA
+       FROM TBL_PERSONAS p
+       LEFT JOIN TBL_CONDOMINIOS c ON p.ID_CONDOMINIO = c.ID_CONDOMINIO
+       WHERE p.NOMBRE_PERSONA = ?
+       ORDER BY p.ID_PERSONA DESC
+       LIMIT 1`,
+      [usuarios[0].NOMBRE_USUARIO]
+    );
+    if (personas.length === 0) throw new ErrorSolicitud(404, "Persona asociada no encontrada");
+    if (!personas[0].ID_CONDOMINIO) throw new ErrorSolicitud(400, "Su usuario no tiene una casa asignada");
+    return { ...personas[0], EMAIL: usuarios[0].EMAIL, ID_USUARIO: usuarios[0].ID_USUARIO };
+  }
+
+  function filtroAcceso(persona) {
+    if (Number(persona.ID_PADRE) === 1) {
+      return { sql: "s.ID_CONDOMINIO = ?", parametros: [persona.ID_CONDOMINIO] };
+    }
+    return { sql: "s.ID_PERSONA = ?", parametros: [persona.ID_PERSONA] };
+  }
+
+  const SELECT_SOLICITUD = `
+    SELECT s.ID_SOLICITUD, s.NUMERO_SEGUIMIENTO, s.ID_PERSONA, s.ID_CONDOMINIO, s.ID_TIPO_SOLICITUD,
+           s.ID_ESTADO_SOLICITUD, s.ASUNTO, s.DESCRIPCION, s.JUSTIFICACION, s.PRIORIDAD,
+           DATE_FORMAT(s.FECHA_PRESENTACION, '%Y-%m-%d %H:%i:%s') AS FECHA_PRESENTACION,
+           DATE_FORMAT(s.FECHA_LIMITE, '%Y-%m-%d') AS FECHA_LIMITE,
+           DATE_FORMAT(s.FECHA_RESPUESTA, '%Y-%m-%d %H:%i:%s') AS FECHA_RESPUESTA,
+           s.RESPUESTA_OFICIAL, p.NOMBRE_PERSONA AS RESIDENTE, c.DESCRIPCION AS CASA,
+           t.DESCRIPCION AS TIPO, e.DESCRIPCION AS ESTADO, e.COLOR AS COLOR_ESTADO, e.ES_FINAL,
+           CASE WHEN e.ES_FINAL = 0 AND s.FECHA_RESPUESTA IS NULL AND s.FECHA_LIMITE < ? THEN 1 ELSE 0 END AS VENCIDA
+    FROM TBL_SOLICITUDES s
+    JOIN TBL_PERSONAS p ON s.ID_PERSONA = p.ID_PERSONA
+    JOIN TBL_CONDOMINIOS c ON s.ID_CONDOMINIO = c.ID_CONDOMINIO
+    JOIN TBL_TIPO_SOLICITUD t ON s.ID_TIPO_SOLICITUD = t.ID_TIPO_SOLICITUD
+    JOIN TBL_ESTADO_SOLICITUD e ON s.ID_ESTADO_SOLICITUD = e.ID_ESTADO_SOLICITUD`;
+
+  async function solicitudConAcceso(connection, persona, condicion, valor) {
+    const acceso = filtroAcceso(persona);
+    const [filas] = await connection.query(
+      `${SELECT_SOLICITUD} WHERE ${condicion} AND ${acceso.sql}`,
+      [ahora().format("YYYY-MM-DD"), valor, ...acceso.parametros]
+    );
+    if (filas.length === 0) throw new ErrorSolicitud(404, "No se encontró la solicitud o no pertenece a su casa");
+    return filas[0];
+  }
+
+  async function guardarAdjuntos(connection, idSolicitud, adjuntos, usuarioId) {
+    for (const adjunto of adjuntos) {
+      await connection.query(
+        `INSERT INTO TBL_SOLICITUD_ADJUNTOS
+         (ID_SOLICITUD, NOMBRE_ORIGINAL, TIPO_MIME, TAMANO_BYTES, CONTENIDO_BASE64, SUBIDO_POR, FECHA_HORA)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [idSolicitud, adjunto.nombre, adjunto.mime, adjunto.bytes, adjunto.base64, usuarioId, ahora().format("YYYY-MM-DD HH:mm:ss")]
+      );
+    }
+  }
+
+  function enviarCorreo(opciones) {
+    if (!transporter) return;
+    transporter.sendMail({ from: CORREO_REMITENTE, ...opciones }, (error) => {
+      if (error) console.error("Solicitudes: error al enviar correo:", error.message);
+    });
+  }
+
+  function responderError(res, error, contexto) {
+    if (error instanceof ErrorSolicitud) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    console.error(`Solicitudes: error en ${contexto}:`, error);
+    return res.status(500).json({ error: "Error en el servidor" });
+  }
+
+  app.get("/tipos_solicitud_admin", async (req, res) => {
+    try {
+      const [tipos] = await mysqlPool.query(
+        `SELECT ID_TIPO_SOLICITUD, DESCRIPCION, DETALLE, DIAS_PLAZO, PRIORIDAD_DEFECTO
+         FROM TBL_TIPO_SOLICITUD WHERE ACTIVO = 1 ORDER BY ID_TIPO_SOLICITUD`
+      );
+      res.status(200).json(tipos);
+    } catch (error) {
+      responderError(res, error, "tipos_solicitud_admin");
+    }
+  });
+
+  app.post("/registrar_solicitud_admin", async (req, res) => {
+    let connection;
+    try {
+      const usuarioId = usuarioSolicitado(req);
+      const idTipo = parseInt(req.body.ID_TIPO_SOLICITUD, 10);
+      const asunto = texto(req.body.ASUNTO).toLocaleUpperCase("es");
+      const descripcion = texto(req.body.DESCRIPCION).toLocaleUpperCase("es");
+      const justificacion = texto(req.body.JUSTIFICACION).toLocaleUpperCase("es");
+
+      if (!Number.isInteger(idTipo)) throw new ErrorSolicitud(400, "Seleccione el tipo de solicitud");
+      if (asunto.length < 5 || asunto.length > 150) throw new ErrorSolicitud(400, "El asunto debe tener entre 5 y 150 caracteres");
+      if (descripcion.length < 10 || descripcion.length > 5000) throw new ErrorSolicitud(400, "La descripción debe tener entre 10 y 5000 caracteres");
+      if (justificacion.length < 5 || justificacion.length > 5000) throw new ErrorSolicitud(400, "La justificación debe tener entre 5 y 5000 caracteres");
+      const adjuntos = validarAdjuntos(req.body.ADJUNTOS, 0);
+
+      connection = await mysqlPool.getConnection();
+      const persona = await personaDelUsuario(connection, usuarioId);
+
+      const [tipos] = await connection.query(
+        "SELECT ID_TIPO_SOLICITUD, DESCRIPCION, DIAS_PLAZO, PRIORIDAD_DEFECTO FROM TBL_TIPO_SOLICITUD WHERE ID_TIPO_SOLICITUD = ? AND ACTIVO = 1",
+        [idTipo]
+      );
+      if (tipos.length === 0) throw new ErrorSolicitud(400, "El tipo de solicitud no está disponible");
+      const tipo = tipos[0];
+
+      const [parametros] = await connection.query(
+        "SELECT VALOR FROM TBL_MS_PARAMETROS WHERE PARAMETRO = 'SOLICITUD_FERIADOS' LIMIT 1"
+      );
+      const feriados = String((parametros[0] && parametros[0].VALOR) || "")
+        .split(",")
+        .map((f) => f.trim())
+        .filter((f) => /^\d{4}-\d{2}-\d{2}$/.test(f));
+
+      const presentacion = ahora();
+      const limite = calcularFechaLimite(presentacion, Number(tipo.DIAS_PLAZO), feriados);
+
+      await connection.beginTransaction();
+      const [insercion] = await connection.query(
+        `INSERT INTO TBL_SOLICITUDES
+         (ID_PERSONA, ID_CONDOMINIO, ID_TIPO_SOLICITUD, ID_ESTADO_SOLICITUD, ID_CANAL_SOLICITUD, ASUNTO, DESCRIPCION,
+          JUSTIFICACION, PRIORIDAD, FECHA_PRESENTACION, FECHA_LIMITE, CREADO_POR, FECHA_CREACION)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          persona.ID_PERSONA,
+          persona.ID_CONDOMINIO,
+          tipo.ID_TIPO_SOLICITUD,
+          ESTADO.RECIBIDA,
+          CANAL_APP,
+          asunto,
+          descripcion,
+          justificacion,
+          tipo.PRIORIDAD_DEFECTO,
+          presentacion.format("YYYY-MM-DD HH:mm:ss"),
+          limite.format("YYYY-MM-DD"),
+          usuarioId,
+          presentacion.format("YYYY-MM-DD HH:mm:ss"),
+        ]
+      );
+      const idSolicitud = insercion.insertId;
+      const numero = numeroSeguimiento(idSolicitud, presentacion.year());
+      await connection.query("UPDATE TBL_SOLICITUDES SET NUMERO_SEGUIMIENTO = ? WHERE ID_SOLICITUD = ?", [numero, idSolicitud]);
+      await connection.query(
+        `INSERT INTO TBL_SOLICITUD_SEGUIMIENTO
+         (ID_SOLICITUD, ID_ESTADO_ANTERIOR, ID_ESTADO_NUEVO, OBSERVACION, VISIBLE_RESIDENTE, ES_RESIDENTE, ID_USUARIO, FECHA_HORA)
+         VALUES (?, NULL, ?, ?, 1, 1, ?, ?)`,
+        [idSolicitud, ESTADO.RECIBIDA, `Solicitud enviada desde la aplicación con el número ${numero}.`, usuarioId, presentacion.format("YYYY-MM-DD HH:mm:ss")]
+      );
+      await guardarAdjuntos(connection, idSolicitud, adjuntos, usuarioId);
+      await connection.commit();
+
+      const limiteTexto = limite.format("DD/MM/YYYY");
+      if (persona.EMAIL) {
+        enviarCorreo({
+          to: persona.EMAIL,
+          subject: `Solicitud ${numero} recibida`,
+          html: `
+            <p>Estimado/a ${escaparHtml(persona.NOMBRE_PERSONA)},</p>
+            <p>La Administración de Villa Las Acacias recibió su solicitud.</p>
+            <p><strong>Número de seguimiento:</strong> ${numero}<br>
+               <strong>Tipo:</strong> ${escaparHtml(tipo.DESCRIPCION)}<br>
+               <strong>Asunto:</strong> ${escaparHtml(asunto)}<br>
+               <strong>Fecha límite de respuesta:</strong> ${limiteTexto}</p>
+            <p>Puede dar seguimiento en la aplicación, opción <em>Mis Solicitudes</em>.</p>
+            <p>Atentamente,</p>
+            <p>El equipo de administración de Villas Las Acacias</p>`,
+        });
+      }
+      const [administradores] = await mysqlPool.query("SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4) AND EMAIL IS NOT NULL");
+      if (administradores.length > 0) {
+        enviarCorreo({
+          to: administradores.map((a) => a.EMAIL),
+          subject: `Nueva solicitud ${numero} - ${tipo.DESCRIPCION}`,
+          html: `
+            <p>Estimados Administradores,</p>
+            <p>Se recibió una nueva solicitud desde la aplicación:</p>
+            <p><strong>Número:</strong> ${numero}<br>
+               <strong>Residente:</strong> ${escaparHtml(persona.NOMBRE_PERSONA)}<br>
+               <strong>Casa:</strong> ${escaparHtml(persona.CASA)}<br>
+               <strong>Tipo:</strong> ${escaparHtml(tipo.DESCRIPCION)}<br>
+               <strong>Asunto:</strong> ${escaparHtml(asunto)}<br>
+               <strong>Responder a más tardar:</strong> ${limiteTexto}</p>
+            <p>Puede gestionarla en el panel web, menú Solicitudes de Residentes.</p>`,
+        });
+      }
+
+      res.status(201).json({
+        message: "Solicitud registrada exitosamente",
+        idSolicitud,
+        numero,
+        fechaLimite: limite.format("YYYY-MM-DD"),
+      });
+    } catch (error) {
+      if (connection) {
+        try {
+          await connection.rollback();
+        } catch (_) {}
+      }
+      responderError(res, error, "registrar_solicitud_admin");
+    } finally {
+      if (connection) connection.release();
+    }
+  });
+
+  app.get("/mis_solicitudes_admin", async (req, res) => {
+    let connection;
+    try {
+      const usuarioId = usuarioSolicitado(req);
+      connection = await mysqlPool.getConnection();
+      const persona = await personaDelUsuario(connection, usuarioId);
+      const acceso = filtroAcceso(persona);
+      const [filas] = await connection.query(
+        `${SELECT_SOLICITUD} WHERE ${acceso.sql}
+         ORDER BY e.ES_FINAL ASC, s.FECHA_PRESENTACION DESC`,
+        [ahora().format("YYYY-MM-DD"), ...acceso.parametros]
+      );
+      res.status(200).json(filas.map(({ DESCRIPCION, JUSTIFICACION, RESPUESTA_OFICIAL, ...resto }) => resto));
+    } catch (error) {
+      responderError(res, error, "mis_solicitudes_admin");
+    } finally {
+      if (connection) connection.release();
+    }
+  });
+
+  app.get("/detalle_solicitud_admin", async (req, res) => {
+    let connection;
+    try {
+      const usuarioId = usuarioSolicitado(req);
+      connection = await mysqlPool.getConnection();
+      const persona = await personaDelUsuario(connection, usuarioId);
+
+      let solicitud;
+      if (req.query.id) {
+        solicitud = await solicitudConAcceso(connection, persona, "s.ID_SOLICITUD = ?", parseInt(req.query.id, 10));
+      } else if (req.query.numero) {
+        solicitud = await solicitudConAcceso(connection, persona, "s.NUMERO_SEGUIMIENTO = ?", texto(req.query.numero).toUpperCase());
+      } else {
+        throw new ErrorSolicitud(400, "Indique el número de seguimiento");
+      }
+
+      const [seguimiento] = await connection.query(
+        `SELECT g.ID_SEGUIMIENTO, g.OBSERVACION, g.ES_RESIDENTE,
+                DATE_FORMAT(g.FECHA_HORA, '%Y-%m-%d %H:%i:%s') AS FECHA_HORA,
+                en.DESCRIPCION AS ESTADO_NUEVO, en.COLOR AS COLOR_ESTADO
+         FROM TBL_SOLICITUD_SEGUIMIENTO g
+         JOIN TBL_ESTADO_SOLICITUD en ON g.ID_ESTADO_NUEVO = en.ID_ESTADO_SOLICITUD
+         WHERE g.ID_SOLICITUD = ? AND g.VISIBLE_RESIDENTE = 1
+         ORDER BY g.FECHA_HORA, g.ID_SEGUIMIENTO`,
+        [solicitud.ID_SOLICITUD]
+      );
+      const [adjuntos] = await connection.query(
+        `SELECT a.ID_ADJUNTO, a.NOMBRE_ORIGINAL, a.TIPO_MIME, a.TAMANO_BYTES,
+                CASE WHEN u.ID_ROL IN (1, 4, 5) THEN 1 ELSE 0 END AS DE_ADMINISTRACION
+         FROM TBL_SOLICITUD_ADJUNTOS a
+         LEFT JOIN TBL_MS_USUARIO u ON u.ID_USUARIO = a.SUBIDO_POR
+         WHERE a.ID_SOLICITUD = ? ORDER BY a.ID_ADJUNTO`,
+        [solicitud.ID_SOLICITUD]
+      );
+      res.status(200).json({ ...solicitud, SEGUIMIENTO: seguimiento, ADJUNTOS: adjuntos });
+    } catch (error) {
+      responderError(res, error, "detalle_solicitud_admin");
+    } finally {
+      if (connection) connection.release();
+    }
+  });
+
+  app.post("/responder_solicitud_admin", async (req, res) => {
+    let connection;
+    try {
+      const usuarioId = usuarioSolicitado(req);
+      const idSolicitud = parseInt(req.body.idSolicitud, 10);
+      const mensaje = texto(req.body.MENSAJE).toLocaleUpperCase("es");
+      if (!Number.isInteger(idSolicitud)) throw new ErrorSolicitud(400, "Solicitud no válida");
+      if (mensaje.length < 5 || mensaje.length > 2000) throw new ErrorSolicitud(400, "El mensaje debe tener entre 5 y 2000 caracteres");
+
+      connection = await mysqlPool.getConnection();
+      const persona = await personaDelUsuario(connection, usuarioId);
+      const solicitud = await solicitudConAcceso(connection, persona, "s.ID_SOLICITUD = ?", idSolicitud);
+      if (Number(solicitud.ES_FINAL) === 1) throw new ErrorSolicitud(400, "La solicitud ya está cerrada");
+
+      const [conteo] = await connection.query("SELECT COUNT(*) AS TOTAL FROM TBL_SOLICITUD_ADJUNTOS WHERE ID_SOLICITUD = ?", [idSolicitud]);
+      const adjuntos = validarAdjuntos(req.body.ADJUNTOS, Number(conteo[0].TOTAL));
+
+      const estadoActual = Number(solicitud.ID_ESTADO_SOLICITUD);
+      const estadoNuevo = estadoActual === ESTADO.PENDIENTE_INFORMACION ? ESTADO.EN_REVISION : estadoActual;
+      const fecha = ahora().format("YYYY-MM-DD HH:mm:ss");
+
+      await connection.beginTransaction();
+      const [bloqueo] = await connection.query("SELECT ID_ESTADO_SOLICITUD FROM TBL_SOLICITUDES WHERE ID_SOLICITUD = ? FOR UPDATE", [idSolicitud]);
+      if (Number(bloqueo[0].ID_ESTADO_SOLICITUD) !== estadoActual) {
+        throw new ErrorSolicitud(409, "La solicitud cambió de estado, actualice la pantalla");
+      }
+      if (estadoNuevo !== estadoActual) {
+        await connection.query("UPDATE TBL_SOLICITUDES SET ID_ESTADO_SOLICITUD = ? WHERE ID_SOLICITUD = ?", [estadoNuevo, idSolicitud]);
+      }
+      await connection.query(
+        `INSERT INTO TBL_SOLICITUD_SEGUIMIENTO
+         (ID_SOLICITUD, ID_ESTADO_ANTERIOR, ID_ESTADO_NUEVO, OBSERVACION, VISIBLE_RESIDENTE, ES_RESIDENTE, ID_USUARIO, FECHA_HORA)
+         VALUES (?, ?, ?, ?, 1, 1, ?, ?)`,
+        [idSolicitud, estadoActual, estadoNuevo, mensaje, usuarioId, fecha]
+      );
+      await guardarAdjuntos(connection, idSolicitud, adjuntos, usuarioId);
+      await connection.commit();
+
+      const [administradores] = await mysqlPool.query("SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4) AND EMAIL IS NOT NULL");
+      if (administradores.length > 0) {
+        enviarCorreo({
+          to: administradores.map((a) => a.EMAIL),
+          subject: `Respuesta del residente en ${solicitud.NUMERO_SEGUIMIENTO}`,
+          html: `
+            <p>El residente ${escaparHtml(persona.NOMBRE_PERSONA)} (casa ${escaparHtml(solicitud.CASA)}) agregó información a la solicitud <strong>${solicitud.NUMERO_SEGUIMIENTO}</strong>:</p>
+            <p style="background:#f4f6f9;padding:10px;border-left:4px solid #14A13B;">${escaparHtml(mensaje)}</p>`,
+        });
+      }
+
+      res.status(200).json({
+        message: estadoNuevo !== estadoActual
+          ? "Información enviada. Su solicitud volvió a revisión."
+          : "Comentario enviado a la Administración.",
+      });
+    } catch (error) {
+      if (connection) {
+        try {
+          await connection.rollback();
+        } catch (_) {}
+      }
+      responderError(res, error, "responder_solicitud_admin");
+    } finally {
+      if (connection) connection.release();
+    }
+  });
+
+  app.get("/adjunto_solicitud_admin", async (req, res) => {
+    let connection;
+    try {
+      const usuarioId = usuarioSolicitado(req);
+      const idAdjunto = parseInt(req.query.id, 10);
+      if (!Number.isInteger(idAdjunto)) throw new ErrorSolicitud(400, "Adjunto no válido");
+      connection = await mysqlPool.getConnection();
+      const persona = await personaDelUsuario(connection, usuarioId);
+      const [adjuntos] = await connection.query(
+        "SELECT ID_ADJUNTO, ID_SOLICITUD, NOMBRE_ORIGINAL, TIPO_MIME, CONTENIDO_BASE64 FROM TBL_SOLICITUD_ADJUNTOS WHERE ID_ADJUNTO = ?",
+        [idAdjunto]
+      );
+      if (adjuntos.length === 0) throw new ErrorSolicitud(404, "Adjunto no encontrado");
+      await solicitudConAcceso(connection, persona, "s.ID_SOLICITUD = ?", adjuntos[0].ID_SOLICITUD);
+      res.status(200).json(adjuntos[0]);
+    } catch (error) {
+      responderError(res, error, "adjunto_solicitud_admin");
+    } finally {
+      if (connection) connection.release();
+    }
+  });
+}
