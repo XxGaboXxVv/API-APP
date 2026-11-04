@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const moment = require("moment-timezone");
 const QRCode = require("qrcode");
 const { exit } = require("process");
+const pushService = require("./services/pushNotificationService");
 
 const SECRET_KEY = "your_secret_key"; // Cambia esto por una clave secreta segura
 const app = express();
@@ -698,6 +699,28 @@ app.post("/verify", async (req, res) => {
       "UPDATE TBL_MS_USUARIO SET CODIGO_VERIFICACION = NULL, PRIMER_INGRESO = ?, FECHA_VENCIMIENTO = ?, ID_ESTADO_USUARIO = 5, INTENTOS_FALLIDOS = 0 WHERE EMAIL = ?",
       [primerIngreso, fechaVencimiento, EMAIL]
     );
+
+    try {
+      const [padreRows] = await connection.query(
+        `SELECT uPadre.ID_USUARIO 
+         FROM TBL_MS_USUARIO uHijo
+         JOIN TBL_PERSONAS pHijo ON uHijo.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = pHijo.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
+         JOIN TBL_PERSONAS pPadre ON pHijo.ID_CONDOMINIO = pPadre.ID_CONDOMINIO AND pPadre.ID_PADRE = 1
+         JOIN TBL_MS_USUARIO uPadre ON uPadre.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = pPadre.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
+         WHERE uHijo.EMAIL = ?`,
+        [EMAIL]
+      );
+      for (const p of padreRows) {
+        pushService.notificarUsuario(mysqlPool, p.ID_USUARIO, {
+          titulo: "Nuevo residente pendiente",
+          mensaje: `${user.NOMBRE_USUARIO} ha solicitado acceso y requiere tu aprobación.`,
+          tipo: "FAMILIA",
+          data: { ruta: "/solicitudes_residentes" },
+        }).catch(() => {});
+      }
+    } catch (eNotif) {
+      console.error("Error al notificar al padre residente:", eNotif);
+    }
 
     res.status(200).json({ message: "Correo verificado exitosamente" });
   } catch (error) {
@@ -1730,18 +1753,20 @@ app.post("/incrementarEstadoQR", async (req, res) => {
   console.log("Datos recibidos QR:", { ID_VISITANTE });
 
   if (!ID_VISITANTE) {
-    console.error("Datos recibidos:");
     return res
       .status(400)
       .json({ message: "ID de visitante no proporcionado" });
   }
   try {
-    // Obtener una conexión del pool
     const connection = await mysqlPool.getConnection();
 
-    // Consultar el estado del QR en TBL_REGVISITAS
     const [visitanteResults] = await connection.query(
-      "SELECT ESTADO_QR FROM TBL_REGVISITAS WHERE ID_VISITANTE = ?",
+      `SELECT r.ESTADO_QR, r.NOMBRE_VISITANTE, r.NUM_PLACA, p.ID_CONDOMINIO, u.ID_USUARIO, c.DESCRIPCION AS CONDOMINIO
+       FROM TBL_REGVISITAS r
+       JOIN TBL_PERSONAS p ON r.ID_PERSONA = p.ID_PERSONA
+       LEFT JOIN TBL_CONDOMINIOS c ON p.ID_CONDOMINIO = c.ID_CONDOMINIO
+       LEFT JOIN TBL_MS_USUARIO u ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = p.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
+       WHERE r.ID_VISITANTE = ?`,
       [ID_VISITANTE]
     );
 
@@ -1750,33 +1775,52 @@ app.post("/incrementarEstadoQR", async (req, res) => {
       return res.status(404).json({ error: "Visitante no encontrado" });
     }
 
-    const estadoQR = visitanteResults[0].ESTADO_QR;
-
-    // Incrementar el estado del QR
+    const visita = visitanteResults[0];
+    const estadoQR = visita.ESTADO_QR;
     const nuevoEstadoQR = estadoQR + 1;
     await connection.query(
       "UPDATE TBL_REGVISITAS SET ESTADO_QR = ? WHERE ID_VISITANTE = ?",
       [nuevoEstadoQR, ID_VISITANTE]
     );
 
-    //Actualizar la fecha de Acceso en la bitacora de visitas
-    const now = new Date(Date.now() - 6 * 60 * 60 * 1000); // UTC-6
+    const now = new Date(Date.now() - 6 * 60 * 60 * 1000);
     const formatDate = now.toISOString().slice(0, 19).replace("T", " ");
 
-    //Actualizar la visitas normales
     await connection.query(
       "UPDATE TBL_REGVISITAS SET FECHA_ACCESO = ? WHERE ID_VISITANTE = ?",
       [formatDate, ID_VISITANTE]
     );
 
-    //Actualizar la Bitacora de visitas
     await connection.query(
       "UPDATE TBL_BITACORA_VISITA SET FECHA_ACCESO = ? WHERE ID_VISITANTE = ?",
       [formatDate, ID_VISITANTE]
     );
 
-    // Liberar la conexión
     connection.release();
+
+    if (visita.ID_USUARIO) {
+      pushService.notificarUsuario(mysqlPool, visita.ID_USUARIO, {
+        titulo: "Visita ingresó a la residencial",
+        mensaje: `Tu visitante ${visita.NOMBRE_VISITANTE || ''} ha ingresado por caseta.`,
+        tipo: "VISITA",
+        data: {
+          ruta: "/visitas",
+          idVisitante: ID_VISITANTE
+        }
+      }).catch(err => console.error("Error push visitante usuario:", err));
+    }
+
+    if (visita.ID_CONDOMINIO) {
+      pushService.notificarAdminCondominio(mysqlPool, visita.ID_CONDOMINIO, {
+        titulo: "Visita ingresó a la vivienda",
+        mensaje: `Visita ${visita.NOMBRE_VISITANTE || ''} para ${visita.CONDOMINIO || 'tu vivienda'} ha ingresado por caseta.`,
+        tipo: "VISITA",
+        data: {
+          ruta: "/visitas",
+          idVisitante: ID_VISITANTE
+        }
+      }).catch(err => console.error("Error push visitante condominio:", err));
+    }
 
     return res
       .status(200)
@@ -1837,14 +1881,49 @@ app.post("/actualizarFechaAccesoRecurrente", async (req, res) => {
       console.warn(
         `Advertencia: No se encontró ningún registro para el Visiatnte Recurrentes ${ID_VISITANTE}.`
       );
-      // Se puede devolver un 200 (OK) o 404 (Not Found) dependiendo del comportamiento deseado
       return res.status(404).json({
         message:
           "No se encontró el visitante recurrente con ese ID para actualizar.",
       });
     }
 
-    // 6. Enviar una respuesta de éxito al cliente
+    const [recResults] = await connection.query(
+      `SELECT r.NOMBRE_VISITANTE, r.NUM_PLACA, p.ID_CONDOMINIO, u.ID_USUARIO, c.DESCRIPCION AS CONDOMINIO
+       FROM TBL_VISITANTES_RECURRENTES r
+       JOIN TBL_PERSONAS p ON r.ID_PERSONA = p.ID_PERSONA
+       LEFT JOIN TBL_CONDOMINIOS c ON p.ID_CONDOMINIO = c.ID_CONDOMINIO
+       LEFT JOIN TBL_MS_USUARIO u ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = p.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
+       WHERE r.ID_VISITANTES_RECURRENTES = ?`,
+      [ID_VISITANTE]
+    );
+
+    if (recResults.length > 0) {
+      const rec = recResults[0];
+      if (rec.ID_USUARIO) {
+        pushService.notificarUsuario(mysqlPool, rec.ID_USUARIO, {
+          titulo: "Visitante frecuente ingresó a la residencial",
+          mensaje: `Tu visitante frecuente ${rec.NOMBRE_VISITANTE || ''} ha ingresado por caseta.`,
+          tipo: "VISITA_RECURRENTE",
+          data: {
+            ruta: "/visitas",
+            idVisitanteRecurrente: ID_VISITANTE
+          }
+        }).catch(err => console.error("Error push recurrente usuario:", err));
+      }
+
+      if (rec.ID_CONDOMINIO) {
+        pushService.notificarAdminCondominio(mysqlPool, rec.ID_CONDOMINIO, {
+          titulo: "Visitante frecuente ingresó a la vivienda",
+          mensaje: `Visitante frecuente ${rec.NOMBRE_VISITANTE || ''} para ${rec.CONDOMINIO || 'tu vivienda'} ha ingresado.`,
+          tipo: "VISITA_RECURRENTE",
+          data: {
+            ruta: "/visitas",
+            idVisitanteRecurrente: ID_VISITANTE
+          }
+        }).catch(err => console.error("Error push recurrente condominio:", err));
+      }
+    }
+
     return res.status(200).json({
       message: "Fecha de acceso actualizada exitosamente.",
     });
@@ -2526,6 +2605,33 @@ app.post("/nueva_reserva", async (req, res) => {
       console.log("Correo enviado a:", emailList);
     });
 
+    try {
+      const [userRows] = await connection.query(
+        `SELECT u.ID_USUARIO 
+         FROM TBL_PERSONAS p 
+         JOIN TBL_MS_USUARIO u ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = p.NOMBRE_PERSONA COLLATE utf8mb4_general_ci 
+         WHERE p.ID_PERSONA = ?`,
+        [ID_PERSONA]
+      );
+      if (userRows.length > 0) {
+        pushService.notificarUsuario(mysqlPool, userRows[0].ID_USUARIO, {
+          titulo: "Reservación Solicitada",
+          mensaje: `Tu solicitud para reservar ${nombreInstalacion} el ${horaFechaDMAHMS} ha sido registrada.`,
+          tipo: "RESERVA",
+          data: { ruta: "/reservaciones" },
+        }).catch(() => {});
+      }
+
+      pushService.notificarRoles(mysqlPool, [1, 4], {
+        titulo: "Nueva Reservación Solicitada",
+        mensaje: `${NOMBRE_PERSONA} (${P_CONDOMINIO}) reservó ${nombreInstalacion} para ${horaFechaDMAHMS}`,
+        tipo: "RESERVA",
+        data: { ruta: "/reservaciones" },
+      }).catch(() => {});
+    } catch (ePush) {
+      console.error("Error al enviar push de reservacion:", ePush);
+    }
+
     res.status(201).json({
       message: "Reserva creada exitosamente",
       reservaId: insertResult.insertId,
@@ -2952,6 +3058,13 @@ app.post("/nueva_persona", async (req, res) => {
           console.log("Correo enviado a:", emailList);
         }
       });
+
+      pushService.notificarRoles(mysqlPool, [1, 4], {
+        titulo: "Nuevo Administrador de Vivienda",
+        mensaje: `${nombreUsuario} se registró como titular de la vivienda ${P_CONDOMINIO}.`,
+        tipo: "USUARIO",
+        data: { ruta: "/residentes" },
+      }).catch(() => {});
     }
 
     // ********* NUEVA LÓGICA: Notificar a administradores del condominio *********
@@ -3006,6 +3119,16 @@ app.post("/nueva_persona", async (req, res) => {
             );
           }
         });
+
+        pushService.notificarAdminCondominio(mysqlPool, ID_CONDOMINIO, {
+          titulo: "Nuevo miembro del hogar registrado",
+          mensaje: `${nombreUsuario} se ha registrado en tu vivienda (${P_CONDOMINIO}) y espera tu aprobación.`,
+          tipo: "FAMILIA",
+          data: {
+            ruta: "/solicitudes",
+            idCondominio: ID_CONDOMINIO,
+          },
+        }).catch(() => {});
       } else {
         console.warn(
           "No se encontraron correos de administradores de la vivienda."
@@ -3172,6 +3295,13 @@ app.post("/aceptar", async (req, res) => {
       [idUsuario]
     );
 
+    pushService.notificarUsuario(mysqlPool, idUsuario, {
+      titulo: "¡Registro Aprobado!",
+      mensaje: "El administrador de tu vivienda ha aprobado tu registro en Villa Las Acacias.",
+      tipo: "FAMILIA",
+      data: { ruta: "/pantalla_principal" },
+    }).catch(() => {});
+
     res.status(200).send("Solicitud aceptada");
   } catch (err) {
     console.error("Error al aceptar la solicitud:", err);
@@ -3211,6 +3341,13 @@ app.post("/rechazar", async (req, res) => {
     }
 
     const { NOMBRE_USUARIO: nombreUsuario, EMAIL: email } = userResult[0];
+
+    pushService.notificarUsuario(mysqlPool, idUsuario, {
+      titulo: "Solicitud Rechazada",
+      mensaje: "Tu solicitud de registro para la vivienda ha sido rechazada.",
+      tipo: "FAMILIA",
+      data: { ruta: "/login" },
+    }).catch(() => {});
 
     // Eliminar el registro de TBL_PERSONAS basado en el NOMBRE_USUARIO
     await connection.query(
@@ -4174,7 +4311,7 @@ app.post("/recibir_paquete", async (req, res) => {
     connection = await mysqlPool.getConnection();
 
     const [rows] = await connection.query(
-      `SELECT p.*, per.NOMBRE_PERSONA, c.DESCRIPCION AS CONDOMINIO, u.EMAIL AS EMAIL_RESIDENTE
+      `SELECT p.*, per.NOMBRE_PERSONA, per.ID_CONDOMINIO, c.DESCRIPCION AS CONDOMINIO, u.EMAIL AS EMAIL_RESIDENTE, u.ID_USUARIO
        FROM TBL_REG_PAQUETES p
        JOIN TBL_PERSONAS per ON p.ID_PERSONA = per.ID_PERSONA
        LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
@@ -4271,6 +4408,34 @@ app.post("/recibir_paquete", async (req, res) => {
       } catch (mailError) {
         console.error("Error al enviar correo de notificación:", mailError);
       }
+    }
+
+    if (paquete.ID_USUARIO) {
+      const tituloPush = estadoFinal === "Rechazado" ? "Paquete rechazado en caseta" : "Paquete recibido en caseta";
+      const mensajePush = estadoFinal === "Rechazado"
+        ? `Tu paquete de ${paquete.EMPRESA_REPARTIDORA || "mensajería"} fue rechazado en caseta.`
+        : `Tu paquete de ${paquete.EMPRESA_REPARTIDORA || "mensajería"} ya está disponible en caseta.`;
+      pushService.notificarUsuario(mysqlPool, paquete.ID_USUARIO, {
+        titulo: tituloPush,
+        mensaje: mensajePush,
+        tipo: "PAQUETE",
+        data: {
+          ruta: "/paquetes",
+          idPaquete: ID_PAQUETE
+        }
+      }).catch(err => console.error("Error push paquete usuario:", err));
+    }
+
+    if (paquete.ID_CONDOMINIO) {
+      pushService.notificarAdminCondominio(mysqlPool, paquete.ID_CONDOMINIO, {
+        titulo: estadoFinal === "Rechazado" ? "Paquete rechazado en caseta" : "Nuevo paquete en caseta",
+        mensaje: `Paquete para ${paquete.NOMBRE_PERSONA} (${paquete.CONDOMINIO || ''}) registrado como ${estadoFinal}.`,
+        tipo: "PAQUETE",
+        data: {
+          ruta: "/paquetes",
+          idPaquete: ID_PAQUETE
+        }
+      }).catch(err => console.error("Error push paquete condominio:", err));
     }
 
     res.status(200).json({
@@ -4694,7 +4859,7 @@ app.post("/registrar_ingreso_multiple", async (req, res) => {
     await connection.beginTransaction();
 
     const [eventoRows] = await connection.query(
-      `SELECT e.*, per.NOMBRE_PERSONA, c.DESCRIPCION AS CONDOMINIO, u.EMAIL AS EMAIL_RESIDENTE
+      `SELECT e.*, per.NOMBRE_PERSONA, per.ID_CONDOMINIO, c.DESCRIPCION AS CONDOMINIO, u.EMAIL AS EMAIL_RESIDENTE, u.ID_USUARIO
        FROM TBL_REG_VISITAS_MULTIPLES e
        JOIN TBL_PERSONAS per ON e.ID_PERSONA = per.ID_PERSONA
        LEFT JOIN TBL_CONDOMINIOS c ON per.ID_CONDOMINIO = c.ID_CONDOMINIO
@@ -4791,6 +4956,30 @@ app.post("/registrar_ingreso_multiple", async (req, res) => {
       } catch (mailErr) {
         console.error("Error al enviar correo de visita múltiple:", mailErr);
       }
+    }
+
+    if (evento.ID_USUARIO) {
+      pushService.notificarUsuario(mysqlPool, evento.ID_USUARIO, {
+        titulo: "Ingreso de visita múltiple registrado",
+        mensaje: `Se registró el ingreso de ${ID_DETALLES.length} persona(s) a tu evento: ${evento.TITULO_EVENTO || ''}.`,
+        tipo: "VISITA_MULTIPLE",
+        data: {
+          ruta: "/visitas_multiples",
+          idVisitaMultiple: ID_VISITA_MULTIPLE
+        }
+      }).catch(err => console.error("Error push multiple usuario:", err));
+    }
+
+    if (evento.ID_CONDOMINIO) {
+      pushService.notificarAdminCondominio(mysqlPool, evento.ID_CONDOMINIO, {
+        titulo: "Ingreso de visitas a tu vivienda",
+        mensaje: `Se registró el ingreso de ${ID_DETALLES.length} persona(s) para el evento: ${evento.TITULO_EVENTO || ''}.`,
+        tipo: "VISITA_MULTIPLE",
+        data: {
+          ruta: "/visitas_multiples",
+          idVisitaMultiple: ID_VISITA_MULTIPLE
+        }
+      }).catch(err => console.error("Error push multiple condominio:", err));
     }
 
     res.status(200).json({
@@ -4999,7 +5188,7 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
   }
 
   const SELECT_SOLICITUD = `
-    SELECT s.ID_SOLICITUD, s.NUMERO_SEGUIMIENTO, s.ID_PERSONA, s.ID_CONDOMINIO, s.ID_TIPO_SOLICITUD,
+    SELECT s.ID_SOLICITUD, s.NUMERO_SEGUIMIENTO, s.ID_PERSONA, s.ID_CONDOMINIO, s.ID_TIPO_SOLICITUD, s.ID_USUARIO_ASIGNADO,
            s.ID_ESTADO_SOLICITUD, s.ASUNTO, s.DESCRIPCION, s.JUSTIFICACION, s.PRIORIDAD,
            DATE_FORMAT(s.FECHA_PRESENTACION, '%Y-%m-%d %H:%i:%s') AS FECHA_PRESENTACION,
            DATE_FORMAT(s.FECHA_LIMITE, '%Y-%m-%d') AS FECHA_LIMITE,
@@ -5068,12 +5257,11 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
       const idTipo = parseInt(req.body.ID_TIPO_SOLICITUD, 10);
       const asunto = texto(req.body.ASUNTO).toLocaleUpperCase("es");
       const descripcion = texto(req.body.DESCRIPCION).toLocaleUpperCase("es");
-      const justificacion = texto(req.body.JUSTIFICACION).toLocaleUpperCase("es");
+      const justificacion = texto(req.body.JUSTIFICACION || req.body.DESCRIPCION).toLocaleUpperCase("es");
 
       if (!Number.isInteger(idTipo)) throw new ErrorSolicitud(400, "Seleccione el tipo de solicitud");
       if (asunto.length < 5 || asunto.length > 150) throw new ErrorSolicitud(400, "El asunto debe tener entre 5 y 150 caracteres");
       if (descripcion.length < 10 || descripcion.length > 5000) throw new ErrorSolicitud(400, "La descripción debe tener entre 10 y 5000 caracteres");
-      if (justificacion.length < 5 || justificacion.length > 5000) throw new ErrorSolicitud(400, "La justificación debe tener entre 5 y 5000 caracteres");
       const adjuntos = validarAdjuntos(req.body.ADJUNTOS, 0);
 
       connection = await mysqlPool.getConnection();
@@ -5165,6 +5353,28 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
             <p>Puede gestionarla en el panel web, menú Solicitudes de Residentes.</p>`,
         });
       }
+
+      pushService.notificarUsuario(mysqlPool, usuarioId, {
+        titulo: `Solicitud ${numero} registrada`,
+        mensaje: `Tu solicitud sobre "${asunto}" ha sido recibida y está en revisión.`,
+        tipo: "SOLICITUD",
+        data: {
+          ruta: "/Mis_solicitudes",
+          idSolicitud: idSolicitud,
+          numero: numero,
+        },
+      }).catch(() => {});
+
+      pushService.notificarRoles(mysqlPool, [1, 4], {
+        titulo: `Nueva Solicitud: ${tipo.DESCRIPCION}`,
+        mensaje: `${persona.NOMBRE_PERSONA} (${persona.CASA}) envió la solicitud ${numero}: ${asunto}`,
+        tipo: "SOLICITUD",
+        data: {
+          ruta: "/Mis_solicitudes",
+          idSolicitud: idSolicitud,
+          numero: numero,
+        },
+      }).catch(() => {});
 
       res.status(201).json({
         message: "Solicitud registrada exitosamente",
@@ -5284,15 +5494,49 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
       await guardarAdjuntos(connection, idSolicitud, adjuntos, usuarioId);
       await connection.commit();
 
-      const [administradores] = await mysqlPool.query("SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4) AND EMAIL IS NOT NULL");
-      if (administradores.length > 0) {
-        enviarCorreo({
-          to: administradores.map((a) => a.EMAIL),
-          subject: `Respuesta del residente en ${solicitud.NUMERO_SEGUIMIENTO}`,
-          html: `
-            <p>El residente ${escaparHtml(persona.NOMBRE_PERSONA)} (casa ${escaparHtml(solicitud.CASA)}) agregó información a la solicitud <strong>${solicitud.NUMERO_SEGUIMIENTO}</strong>:</p>
-            <p style="background:#f4f6f9;padding:10px;border-left:4px solid #14A13B;">${escaparHtml(mensaje)}</p>`,
-        });
+      const idAdminAsignado = solicitud.ID_USUARIO_ASIGNADO ? Number(solicitud.ID_USUARIO_ASIGNADO) : null;
+      if (idAdminAsignado) {
+        const [adminRows] = await mysqlPool.query("SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_USUARIO = ?", [idAdminAsignado]);
+        if (adminRows.length > 0 && adminRows[0].EMAIL) {
+          enviarCorreo({
+            to: adminRows[0].EMAIL,
+            subject: `Respuesta del residente en ${solicitud.NUMERO_SEGUIMIENTO}`,
+            html: `
+              <p>El residente ${escaparHtml(persona.NOMBRE_PERSONA)} (casa ${escaparHtml(solicitud.CASA)}) agregó información a la solicitud <strong>${solicitud.NUMERO_SEGUIMIENTO}</strong> asignada a usted:</p>
+              <p style="background:#f4f6f9;padding:10px;border-left:4px solid #14A13B;">${escaparHtml(mensaje)}</p>`,
+          });
+        }
+        pushService.notificarUsuario(mysqlPool, idAdminAsignado, {
+          titulo: `Respuesta en Solicitud ${solicitud.NUMERO_SEGUIMIENTO}`,
+          mensaje: `${persona.NOMBRE_PERSONA} (${solicitud.CASA}) respondió: ${mensaje.substring(0, 100)}`,
+          tipo: "SOLICITUD",
+          data: {
+            ruta: "/Mis_solicitudes",
+            idSolicitud: solicitud.ID_SOLICITUD,
+            numero: solicitud.NUMERO_SEGUIMIENTO,
+          },
+        }).catch(() => {});
+      } else {
+        const [administradores] = await mysqlPool.query("SELECT EMAIL FROM TBL_MS_USUARIO WHERE ID_ROL IN (1, 4) AND EMAIL IS NOT NULL");
+        if (administradores.length > 0) {
+          enviarCorreo({
+            to: administradores.map((a) => a.EMAIL),
+            subject: `Respuesta del residente en ${solicitud.NUMERO_SEGUIMIENTO}`,
+            html: `
+              <p>El residente ${escaparHtml(persona.NOMBRE_PERSONA)} (casa ${escaparHtml(solicitud.CASA)}) agregó información a la solicitud <strong>${solicitud.NUMERO_SEGUIMIENTO}</strong>:</p>
+              <p style="background:#f4f6f9;padding:10px;border-left:4px solid #14A13B;">${escaparHtml(mensaje)}</p>`,
+          });
+        }
+        pushService.notificarRoles(mysqlPool, [1, 4], {
+          titulo: `Respuesta en Solicitud ${solicitud.NUMERO_SEGUIMIENTO}`,
+          mensaje: `${persona.NOMBRE_PERSONA} (${solicitud.CASA}) agregó nueva información.`,
+          tipo: "SOLICITUD",
+          data: {
+            ruta: "/Mis_solicitudes",
+            idSolicitud: solicitud.ID_SOLICITUD,
+            numero: solicitud.NUMERO_SEGUIMIENTO,
+          },
+        }).catch(() => {});
       }
 
       res.status(200).json({
@@ -5307,6 +5551,61 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
         } catch (_) {}
       }
       responderError(res, error, "responder_solicitud_admin");
+    } finally {
+      if (connection) connection.release();
+    }
+  });
+
+  app.post("/solicitudes_admin/cambiar_prioridad", async (req, res) => {
+    let connection;
+    try {
+      const usuarioId = usuarioSolicitado(req);
+      const { idSolicitud, prioridad } = req.body;
+      const prioridadNorm = String(prioridad || "").trim().toLowerCase();
+      const prioridadesValidas = { baja: "Baja", media: "Media", alta: "Alta" };
+      if (!prioridadesValidas[prioridadNorm]) {
+        throw new ErrorSolicitud(400, "Prioridad no válida. Debe ser Baja, Media o Alta");
+      }
+      connection = await mysqlPool.getConnection();
+      const persona = await personaDelUsuario(connection, usuarioId);
+      if (![1, 4, 5].includes(persona.ID_ROL)) {
+        throw new ErrorSolicitud(403, "Solo el administrador o junta pueden cambiar la prioridad del ticket");
+      }
+      const [solicitudes] = await connection.query(
+        "SELECT ID_SOLICITUD, NUMERO_SEGUIMIENTO, PRIORIDAD, ID_ESTADO_SOLICITUD FROM TBL_SOLICITUDES WHERE ID_SOLICITUD = ?",
+        [idSolicitud]
+      );
+      if (solicitudes.length === 0) throw new ErrorSolicitud(404, "Solicitud no encontrada");
+      const sol = solicitudes[0];
+      const nuevaPrioridad = prioridadesValidas[prioridadNorm];
+      if (sol.PRIORIDAD !== nuevaPrioridad) {
+        await connection.query("UPDATE TBL_SOLICITUDES SET PRIORIDAD = ? WHERE ID_SOLICITUD = ?", [nuevaPrioridad, idSolicitud]);
+        await connection.query(
+          `INSERT INTO TBL_SOLICITUD_SEGUIMIENTO
+           (ID_SOLICITUD, ID_ESTADO_ANTERIOR, ID_ESTADO_NUEVO, OBSERVACION, VISIBLE_RESIDENTE, ES_RESIDENTE, ID_USUARIO, FECHA_HORA)
+           VALUES (?, ?, ?, ?, 1, 0, ?, ?)`,
+          [idSolicitud, sol.ID_ESTADO_SOLICITUD, sol.ID_ESTADO_SOLICITUD, `Prioridad actualizada de ${sol.PRIORIDAD || "Media"} a ${nuevaPrioridad}`, usuarioId, ahora().toDate()]
+        );
+        const [usuariosCasa] = await connection.query(
+          `SELECT u.ID_USUARIO 
+           FROM TBL_SOLICITUDES s 
+           JOIN TBL_PERSONAS p ON s.ID_PERSONA = p.ID_PERSONA 
+           JOIN TBL_MS_USUARIO u ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = p.NOMBRE_PERSONA COLLATE utf8mb4_general_ci 
+           WHERE s.ID_SOLICITUD = ?`,
+          [idSolicitud]
+        );
+        for (const u of usuariosCasa) {
+          pushService.notificarUsuario(mysqlPool, u.ID_USUARIO, {
+            titulo: `Solicitud ${sol.NUMERO_SEGUIMIENTO}`,
+            mensaje: `La prioridad fue actualizada a ${nuevaPrioridad}`,
+            tipo: "SOLICITUD",
+            data: { ruta: "/Mis_solicitudes", idSolicitud: idSolicitud, numero: sol.NUMERO_SEGUIMIENTO }
+          }).catch(() => {});
+        }
+      }
+      res.status(200).json({ message: "Prioridad actualizada correctamente", prioridad: nuevaPrioridad });
+    } catch (error) {
+      responderError(res, error, "cambiar_prioridad_solicitud");
     } finally {
       if (connection) connection.release();
     }
@@ -5334,3 +5633,218 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
     }
   });
 }
+
+
+app.post("/enviar_notificacion_push", async (req, res) => {
+  const { usuarioId, titulo, mensaje, tipo, data, soloPush } = req.body;
+  if (!usuarioId || !titulo || !mensaje) {
+    return res.status(400).json({ error: "usuarioId, titulo y mensaje son requeridos" });
+  }
+  try {
+    await pushService.notificarUsuario(mysqlPool, usuarioId, {
+      titulo,
+      mensaje,
+      tipo: tipo || "SOLICITUD",
+      data: data || {},
+      soloPush: !!soloPush,
+    });
+    res.status(200).json({ message: "Notificación push despachada exitosamente" });
+  } catch (error) {
+    console.error("Error al despachar push:", error);
+    res.status(500).json({ error: "Error interno al despachar push" });
+  }
+});
+
+app.post("/enviar_notificacion_push_global", async (req, res) => {
+  const { titulo, mensaje, tipo, data } = req.body;
+  if (!titulo || !mensaje) {
+    return res.status(400).json({ error: "titulo y mensaje son requeridos" });
+  }
+  try {
+    await pushService.notificarGlobal(mysqlPool, {
+      titulo,
+      mensaje,
+      tipo: tipo || "ANUNCIO",
+      data: data || {},
+    });
+    res.status(200).json({ message: "Notificación push global despachada exitosamente" });
+  } catch (error) {
+    console.error("Error al despachar push global:", error);
+    res.status(500).json({ error: "Error interno al despachar push global" });
+  }
+});
+
+app.post("/enviar_notificacion_push_roles", async (req, res) => {
+  const { roles, titulo, mensaje, tipo, data } = req.body;
+  if (!roles || !titulo || !mensaje) {
+    return res.status(400).json({ error: "roles, titulo y mensaje son requeridos" });
+  }
+  try {
+    const rolesArray = Array.isArray(roles) ? roles : [Number(roles)];
+    await pushService.notificarRoles(mysqlPool, rolesArray, {
+      titulo,
+      mensaje,
+      tipo: tipo || "GENERAL",
+      data: data || {},
+    });
+    res.status(200).json({ message: "Notificación push a roles despachada exitosamente" });
+  } catch (error) {
+    console.error("Error al despachar push a roles:", error);
+    res.status(500).json({ error: "Error interno al despachar push a roles" });
+  }
+});
+
+app.post("/guardar_token_fcm", async (req, res) => {
+  const { usuarioId, fcmToken, plataforma } = req.body;
+  if (!usuarioId || !fcmToken) {
+    return res.status(400).json({ error: "usuarioId y fcmToken son requeridos" });
+  }
+  try {
+    await pushService.guardarTokenDispositivo(mysqlPool, usuarioId, fcmToken, plataforma || "Android");
+    res.status(200).json({ message: "Token FCM registrado exitosamente" });
+  } catch (error) {
+    console.error("Error al guardar token FCM:", error);
+    res.status(500).json({ error: "Error en el servidor al guardar token" });
+  }
+});
+
+app.get("/mis_notificaciones/:usuarioId", async (req, res) => {
+  const { usuarioId } = req.params;
+  try {
+    const [notificaciones] = await mysqlPool.query(
+      `SELECT ID_NOTIFICACION, ID_USUARIO, TITULO, MENSAJE, TIPO, LEIDO, DATOS_EXTRA, FECHA_CREACION
+       FROM TBL_NOTIFICACIONES
+       WHERE ID_USUARIO = ?
+       ORDER BY FECHA_CREACION DESC
+       LIMIT 60`,
+      [usuarioId]
+    );
+    res.status(200).json(notificaciones);
+  } catch (error) {
+    console.error("Error al obtener notificaciones:", error);
+    res.status(500).json({ error: "Error al obtener notificaciones" });
+  }
+});
+
+app.get("/conteo_notificaciones_no_leidas/:usuarioId", async (req, res) => {
+  const { usuarioId } = req.params;
+  try {
+    const [rows] = await mysqlPool.query(
+      `SELECT COUNT(*) AS noLeidas
+       FROM TBL_NOTIFICACIONES
+       WHERE ID_USUARIO = ? AND LEIDO = 0`,
+      [usuarioId]
+    );
+    res.status(200).json({ noLeidas: rows[0].noLeidas || 0 });
+  } catch (error) {
+    console.error("Error al contar notificaciones no leídas:", error);
+    res.status(500).json({ error: "Error al contar notificaciones" });
+  }
+});
+
+app.post("/marcar_notificacion_leida/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    await mysqlPool.query(
+      "UPDATE TBL_NOTIFICACIONES SET LEIDO = 1 WHERE ID_NOTIFICACION = ?",
+      [id]
+    );
+    res.status(200).json({ message: "Notificación marcada como leída" });
+  } catch (error) {
+    console.error("Error al marcar notificación leída:", error);
+    res.status(500).json({ error: "Error al actualizar notificación" });
+  }
+});
+
+app.post("/toggle_notificacion_leida/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    await mysqlPool.query(
+      "UPDATE TBL_NOTIFICACIONES SET LEIDO = CASE WHEN LEIDO = 1 THEN 0 ELSE 1 END WHERE ID_NOTIFICACION = ?",
+      [id]
+    );
+    res.status(200).json({ message: "Estado de lectura actualizado" });
+  } catch (error) {
+    console.error("Error al alternar estado de notificación:", error);
+    res.status(500).json({ error: "Error al actualizar notificación" });
+  }
+});
+
+app.post("/marcar_todas_notificaciones_leidas", async (req, res) => {
+  const { usuarioId } = req.body;
+  if (!usuarioId) {
+    return res.status(400).json({ error: "usuarioId es requerido" });
+  }
+  try {
+    await mysqlPool.query(
+      "UPDATE TBL_NOTIFICACIONES SET LEIDO = 1 WHERE ID_USUARIO = ? AND LEIDO = 0",
+      [usuarioId]
+    );
+    res.status(200).json({ message: "Todas las notificaciones fueron marcadas como leídas" });
+  } catch (error) {
+    console.error("Error al marcar todas como leídas:", error);
+    res.status(500).json({ error: "Error al actualizar notificaciones" });
+  }
+});
+
+app.delete("/eliminar_notificacion/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    await mysqlPool.query(
+      "DELETE FROM TBL_NOTIFICACIONES WHERE ID_NOTIFICACION = ?",
+      [id]
+    );
+    res.status(200).json({ message: "Notificación eliminada exitosamente" });
+  } catch (error) {
+    console.error("Error al eliminar notificación:", error);
+    res.status(500).json({ error: "Error al eliminar notificación" });
+  }
+});
+
+app.delete("/eliminar_todas_notificaciones/:usuarioId", async (req, res) => {
+  const { usuarioId } = req.params;
+  try {
+    await mysqlPool.query(
+      "DELETE FROM TBL_NOTIFICACIONES WHERE ID_USUARIO = ?",
+      [usuarioId]
+    );
+    res.status(200).json({ message: "Historial de notificaciones eliminado" });
+  } catch (error) {
+    console.error("Error al eliminar todas las notificaciones:", error);
+    res.status(500).json({ error: "Error al eliminar historial" });
+  }
+});
+
+app.post(["/publicar_anuncio", "/POST_ANUNCIOS_EVENTOS"], async (req, res) => {
+  const { TITULO, DESCRIPCION, IMAGEN, P_TITULO, P_DESCRIPCION, P_IMAGEN, P_ID_ESTADO_ANUNCIO_EVENTO } = req.body;
+  const tituloFinal = TITULO || P_TITULO;
+  const descFinal = DESCRIPCION || P_DESCRIPCION;
+  const imgFinal = IMAGEN || P_IMAGEN || null;
+  const estadoFinal = P_ID_ESTADO_ANUNCIO_EVENTO || 1;
+
+  if (!tituloFinal || !descFinal) {
+    return res.status(400).json({ error: "TITULO y DESCRIPCION son requeridos" });
+  }
+  try {
+    const [result] = await mysqlPool.query(
+      `INSERT INTO TBL_ANUNCIOS_EVENTOS (TITULO, DESCRIPCION, IMAGEN, FECHA_HORA, ID_ESTADO_ANUNCIO_EVENTO)
+       VALUES (?, ?, ?, NOW(), ?)`,
+      [tituloFinal, descFinal, imgFinal, estadoFinal]
+    );
+
+    await pushService.notificarGlobal(mysqlPool, {
+      titulo: `📢 Nuevo Anuncio: ${tituloFinal}`,
+      mensaje: descFinal.length > 100 ? `${descFinal.substring(0, 97)}...` : descFinal,
+      tipo: "GLOBAL",
+      data: {
+        ruta: "/AnunciosEventos",
+        idAnuncio: result.insertId
+      }
+    });
+
+    res.status(201).json({ message: "Anuncio publicado y notificado a toda la comunidad", id: result.insertId });
+  } catch (error) {
+    console.error("Error al publicar anuncio:", error);
+    res.status(500).json({ error: "Error al publicar anuncio" });
+  }
+});
