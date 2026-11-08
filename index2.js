@@ -5056,6 +5056,7 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
 
   const ESTADO = {
     RECIBIDA: 1,
+    PENDIENTE_REVISION: 1,
     EN_REVISION: 2,
     PENDIENTE_INFORMACION: 3,
   };
@@ -5323,10 +5324,10 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
       if (persona.EMAIL) {
         enviarCorreo({
           to: persona.EMAIL,
-          subject: `Solicitud ${numero} recibida`,
+          subject: `Solicitud ${numero} registrada (Pendiente de revisión)`,
           html: `
             <p>Estimado/a ${escaparHtml(persona.NOMBRE_PERSONA)},</p>
-            <p>La Administración de Villa Las Acacias recibió su solicitud.</p>
+            <p>La Administración de Villa Las Acacias registró su solicitud (Pendiente de revisión).</p>
             <p><strong>Número de seguimiento:</strong> ${numero}<br>
                <strong>Tipo:</strong> ${escaparHtml(tipo.DESCRIPCION)}<br>
                <strong>Asunto:</strong> ${escaparHtml(asunto)}<br>
@@ -5356,7 +5357,7 @@ app.get("/reporte_visitas_multiples", async (req, res) => {
 
       pushService.notificarUsuario(mysqlPool, usuarioId, {
         titulo: `Solicitud ${numero} registrada`,
-        mensaje: `Tu solicitud sobre "${asunto}" ha sido recibida y está en revisión.`,
+        mensaje: `Tu solicitud sobre "${asunto}" ha sido registrada y está pendiente de revisión.`,
         tipo: "SOLICITUD",
         data: {
           ruta: "/Mis_solicitudes",

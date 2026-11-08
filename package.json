@@ -15,6 +15,7 @@
     "connect-mysql2": "^2.2.6",
     "express": "^4.19.2",
     "express-session": "^1.18.0",
+    "firebase-admin": "^14.5.0",
     "jsonwebtoken": "^9.0.2",
     "moment-timezone": "^0.5.45",
     "mysql": "^2.18.1",
