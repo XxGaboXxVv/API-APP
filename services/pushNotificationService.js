@@ -7,16 +7,39 @@ let firebaseApp = null;
 let messagingInstance = null;
 
 try {
-  const serviceAccountPath = path.join(__dirname, '..', 'serviceAccountKey.json');
-  if (fs.existsSync(serviceAccountPath)) {
-    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+  let serviceAccount = null;
+  const envKey = process.env.FIREBASE_SERVICE_ACCOUNT;
+  const customPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  const defaultPath = path.join(__dirname, '..', 'serviceAccountKey.json');
+  const renderSecretPath = '/etc/secrets/serviceAccountKey.json';
+
+  if (envKey) {
+    try {
+      serviceAccount = JSON.parse(envKey);
+    } catch {
+      try {
+        const decoded = Buffer.from(envKey, 'base64').toString('utf8');
+        serviceAccount = JSON.parse(decoded);
+      } catch (err) {
+        console.error('Error al parsear FIREBASE_SERVICE_ACCOUNT:', err.message);
+      }
+    }
+  } else if (customPath && fs.existsSync(customPath)) {
+    serviceAccount = JSON.parse(fs.readFileSync(customPath, 'utf8'));
+  } else if (fs.existsSync(defaultPath)) {
+    serviceAccount = JSON.parse(fs.readFileSync(defaultPath, 'utf8'));
+  } else if (fs.existsSync(renderSecretPath)) {
+    serviceAccount = JSON.parse(fs.readFileSync(renderSecretPath, 'utf8'));
+  }
+
+  if (serviceAccount) {
     firebaseApp = initializeApp({
       credential: cert(serviceAccount)
     });
     messagingInstance = getMessaging(firebaseApp);
-    console.log('Firebase Admin inicializado correctamente con serviceAccountKey.json');
+    console.log('Firebase Admin inicializado correctamente');
   } else {
-    console.log('serviceAccountKey.json no encontrado. Las notificaciones push FCM se registrarán en base de datos hasta que se agregue la clave.');
+    console.log('Credenciales de Firebase no encontradas. Las notificaciones se guardaran en base de datos.');
   }
 } catch (error) {
   console.error('Error al inicializar Firebase Admin:', error.message);
