@@ -46,6 +46,16 @@ function descifrarTokenSeguroQR(token) {
   return JSON.parse(decrypted);
 }
 
+function parseFechaTegucigalpa(val) {
+  if (!val) return null;
+  if (typeof val === "string") {
+    const cleanStr = val.replace("T", " ").replace("Z", "").split(".")[0];
+    return moment.tz(cleanStr, "YYYY-MM-DD HH:mm:ss", "America/Tegucigalpa").isValid()
+      ? moment.tz(cleanStr, "YYYY-MM-DD HH:mm:ss", "America/Tegucigalpa")
+      : moment.tz(cleanStr, "America/Tegucigalpa");
+  }
+  return moment.tz(moment.utc(val).format("YYYY-MM-DD HH:mm:ss"), "America/Tegucigalpa");
+}
 
 const mysqlPool = mysql.createPool({
   host: "trolley.proxy.rlwy.net",
@@ -53,6 +63,8 @@ const mysqlPool = mysql.createPool({
   password: "tHEvmLXjFLgWVeLwTDbikGGTuDVcJqRK",
   database: "railway",
   port: 50385,
+  dateStrings: true,
+  timezone: "-06:00",
   waitForConnections: true, // Espera si se supera el límite
   connectionLimit: 40, // ✅ MÁXIM0 conexiones simultáneas
   queueLimit: 0, // Sin límite en cola de espera
@@ -1364,13 +1376,13 @@ app.post("/consultarQR_detalles", async (req, res) => {
         TipoRemitente: paq.TIPO_REMITENTE,
         Dimension: paq.DIMENSION,
         Descripcion: paq.DESCRIPCION || "",
-        FechaEstimada: paq.FECHA_ESTIMADA_ENTREGA ? moment(paq.FECHA_ESTIMADA_ENTREGA).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A") : "",
+        FechaEstimada: paq.FECHA_ESTIMADA_ENTREGA ? parseFechaTegucigalpa(paq.FECHA_ESTIMADA_ENTREGA).format("DD/MM/YYYY hh:mm A") : "",
         Residente: paq.RESIDENTE,
         Condominio: paq.CONDOMINIO || "N/A",
         Estado: paq.ESTADO_PAQUETE,
         EstadoFisico: paq.ESTADO_FISICO,
         Observaciones: paq.OBSERVACIONES_GUARDIA,
-        FechaRecepcion: paq.FECHA_RECEPCION ? moment(paq.FECHA_RECEPCION).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A") : null,
+        FechaRecepcion: paq.FECHA_RECEPCION ? parseFechaTegucigalpa(paq.FECHA_RECEPCION).format("DD/MM/YYYY hh:mm A") : null,
         UsuarioRecepcion: paq.USUARIO_RECEPCION,
       };
 
@@ -1411,9 +1423,12 @@ app.post("/consultarQR_detalles", async (req, res) => {
       );
 
       const fechaHoy = moment().tz("America/Tegucigalpa").format("YYYY-MM-DD");
-      const fechaEventoDia = moment(ev.FECHA_EVENTO).tz("America/Tegucigalpa").format("YYYY-MM-DD");
+      const fechaEventoObj = parseFechaTegucigalpa(ev.FECHA_EVENTO);
+      const fechaVencimientoObj = parseFechaTegucigalpa(ev.FECHA_VENCIMIENTO);
+
+      const fechaEventoDia = fechaEventoObj.format("YYYY-MM-DD");
       const esFechaValida = (fechaHoy === fechaEventoDia);
-      const yaVencido = moment().tz("America/Tegucigalpa").isAfter(moment(ev.FECHA_VENCIMIENTO));
+      const yaVencido = moment().tz("America/Tegucigalpa").isAfter(fechaVencimientoObj);
 
       const visitantesFormateados = visitantesRows.map((v) => {
         let estadoIngreso = v.ESTADO_INGRESO || "Pendiente";
@@ -1427,7 +1442,7 @@ app.post("/consultarQR_detalles", async (req, res) => {
           NombreCompleto: v.NOMBRE_VISITANTE,
           Documento: v.DOCUMENTO || "",
           EstadoIngreso: estadoIngreso,
-          FechaIngreso: v.FECHA_INGRESO ? moment(v.FECHA_INGRESO).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A") : null,
+          FechaIngreso: v.FECHA_INGRESO ? parseFechaTegucigalpa(v.FECHA_INGRESO).format("DD/MM/YYYY hh:mm A") : null,
           ObservacionesGuardia: v.OBSERVACIONES_GUARDIA || "",
           UsuarioGuardia: v.USUARIO_GUARDIA || "",
         };
@@ -1440,9 +1455,9 @@ app.post("/consultarQR_detalles", async (req, res) => {
         ID_VISITA_MULTIPLE: ev.ID_VISITA_MULTIPLE,
         TituloEvento: ev.TITULO_EVENTO,
         ObservacionesResidente: ev.OBSERVACIONES_RESIDENTE || "",
-        FechaEvento: moment(ev.FECHA_EVENTO).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A"),
-        FechaEventoCorta: moment(ev.FECHA_EVENTO).tz("America/Tegucigalpa").format("DD/MM/YYYY"),
-        FechaVencimiento: moment(ev.FECHA_VENCIMIENTO).tz("America/Tegucigalpa").format("DD/MM/YYYY hh:mm A"),
+        FechaEvento: fechaEventoObj.format("DD/MM/YYYY hh:mm A"),
+        FechaEventoCorta: fechaEventoObj.format("DD/MM/YYYY"),
+        FechaVencimiento: fechaVencimientoObj.format("DD/MM/YYYY hh:mm A"),
         Residente: ev.RESIDENTE,
         Condominio: ev.CONDOMINIO || "N/A",
         Estado: ev.ESTADO,
@@ -4678,7 +4693,8 @@ app.get("/mis_visitas_multiples/:usuarioId", async (req, res) => {
         });
       }
 
-      const yaVencido = moment().tz("America/Tegucigalpa").isAfter(moment(ev.FECHA_VENCIMIENTO));
+      const fechaVencimientoObj = parseFechaTegucigalpa(ev.FECHA_VENCIMIENTO);
+      const yaVencido = moment().tz("America/Tegucigalpa").isAfter(fechaVencimientoObj);
       const visitantesMapeados = visitantes.map((v) => {
         let estado = v.ESTADO_INGRESO || "Pendiente";
         if (ev.ESTADO === "Cancelado" && estado !== "Ingresado") {
