@@ -48,11 +48,11 @@ function descifrarTokenSeguroQR(token) {
 
 
 const mysqlPool = mysql.createPool({
-  host: "iriguchi.proxy.rlwy.net",
+  host: "trolley.proxy.rlwy.net",
   user: "root",
-  password: "pRbarXwePitmvYrCaRXuGtRKmoJGFhQJ",
+  password: "tHEvmLXjFLgWVeLwTDbikGGTuDVcJqRK",
   database: "railway",
-  port: 19233,
+  port: 50385,
   waitForConnections: true, // Espera si se supera el límite
   connectionLimit: 40, // ✅ MÁXIM0 conexiones simultáneas
   queueLimit: 0, // Sin límite en cola de espera
