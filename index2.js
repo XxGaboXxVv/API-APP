@@ -3406,51 +3406,49 @@ app.post("/confirmar_visita", async (req, res) => {
   const { nombreResidente, nombreVisitante, numeroPersonas } = req.body;
   let connection;
   try {
-    // Obtener una conexión del pool
     connection = await mysqlPool.getConnection();
 
-    // Consulta para buscar el correo electrónico del residente
-    const [rows] = await connection.execute(
-      "SELECT EMAIL FROM TBL_MS_USUARIO WHERE NOMBRE_USUARIO = ?",
-      [nombreResidente] // Usamos el parámetro nombreResidente
+    const [rows] = await connection.query(
+      `SELECT u.EMAIL 
+       FROM TBL_MS_USUARIO u
+       LEFT JOIN TBL_PERSONAS p ON (p.ID_PERSONA = u.ID_PERSONA OR u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = p.NOMBRE_PERSONA COLLATE utf8mb4_general_ci)
+       WHERE u.NOMBRE_USUARIO = ? OR p.NOMBRE_PERSONA = ?
+       LIMIT 1`,
+      [nombreResidente, nombreResidente]
     );
 
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "Residente no encontrado" });
+    if (rows.length > 0 && rows[0].EMAIL) {
+      const emailResidente = rows[0].EMAIL;
+      const fechaActual = moment
+        .tz("America/Tegucigalpa")
+        .format("DD-MM-YYYY HH:mm");
+
+      const mailOptions = {
+        from: "villalasacacias@villalasacacias.com",
+        to: emailResidente,
+        subject: "Confirmación de Visita",
+        html: `
+                <p>Estimado ${nombreResidente},</p>
+                <p>Le informamos que ha llegado un visitante:</p>
+                <p><strong>Nombre del visitante:</strong> ${nombreVisitante}</p>
+                <p><strong>Número de personas:</strong> ${numeroPersonas}</p>
+                <p><strong>Fecha y hora de llegada:</strong> ${fechaActual}</p>
+                <p>Atentamente,</p>
+                <p>El equipo de administración de Villas Las Acacias</p>
+            `,
+      };
+
+      transporter.sendMail(mailOptions, (err) => {
+        if (err) console.error("Error al enviar correo de visita:", err);
+      });
     }
 
-    // Capturar el correo electrónico del residente
-    const emailResidente = rows[0].EMAIL;
-    const fechaActual = moment
-      .tz("America/Tegucigalpa")
-      .format("DD-MM-YYYY HH:mm");
-
-    // Redactar el correo
-    const mailOptions = {
-      from: "villalasacacias@villalasacacias.com",
-      to: emailResidente, // Enviar el correo al residente encontrado
-      subject: "Confirmación de Visita",
-      html: `
-              <p>Estimado ${nombreResidente},</p>
-              <p>Le informamos que ha llegado un visitante:</p>
-              <p><strong>Nombre del visitante:</strong> ${nombreVisitante}</p>
-              <p><strong>Número de personas:</strong> ${numeroPersonas}</p>
-              <p><strong>Fecha y hora de llegada:</strong> ${fechaActual}</p>
-              <p>Atentamente,</p>
-              <p>El equipo de administración de Villas Las Acacias</p>
-          `,
-    };
-
-    // Enviar el correo
-    await transporter.sendMail(mailOptions);
-    console.log("Correo enviado a:", emailResidente);
-    return res.status(200).json({ message: "Correo enviado exitosamente" });
+    return res.status(200).json({ message: "Visita confirmada exitosamente" });
   } catch (err) {
     console.error("Error al realizar la operación:", err);
     return res.status(500).json({ error: "Error al procesar la solicitud" });
   } finally {
     if (connection) {
-      console.log("Conexion liberada");
       connection.release();
     }
   }
@@ -4399,14 +4397,16 @@ app.post("/recibir_paquete", async (req, res) => {
           </div>
         `;
 
-        await transporter.sendMail({
+        transporter.sendMail({
           from: '"Villa Las Acacias" <villalasacacias@villalasacacias.com>',
           to: emailDestino,
           subject: asunto,
           html: contenidoHtml,
+        }, (mailError) => {
+          if (mailError) console.error("Error al enviar correo de notificación paquete:", mailError);
         });
       } catch (mailError) {
-        console.error("Error al enviar correo de notificación:", mailError);
+        console.error("Error al preparar correo de notificación:", mailError);
       }
     }
 
@@ -4947,14 +4947,16 @@ app.post("/registrar_ingreso_multiple", async (req, res) => {
           </div>
         `;
 
-        await transporter.sendMail({
+        transporter.sendMail({
           from: "villalasacacias@villalasacacias.com",
           to: emailDestino,
           subject: `Villa Las Acacias - Notificación: Ingreso de Visita Múltiple (${evento.TITULO_EVENTO})`,
           html: contenidoHtml,
+        }, (mailErr) => {
+          if (mailErr) console.error("Error al enviar correo de visita múltiple:", mailErr);
         });
       } catch (mailErr) {
-        console.error("Error al enviar correo de visita múltiple:", mailErr);
+        console.error("Error al preparar correo de visita múltiple:", mailErr);
       }
     }
 
