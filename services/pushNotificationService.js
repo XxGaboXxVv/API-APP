@@ -96,6 +96,18 @@ async function despacharFCM(mysqlPool, tokens, { titulo, mensaje, data }) {
         priority: 'max',
       },
     },
+    apns: {
+      headers: {
+        'apns-priority': '10',
+      },
+      payload: {
+        aps: {
+          sound: 'default',
+          badge: 1,
+          contentAvailable: true,
+        },
+      },
+    },
     tokens: tokens,
   };
 

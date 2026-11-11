@@ -58,11 +58,11 @@ function parseFechaTegucigalpa(val) {
 }
 
 const mysqlPool = mysql.createPool({
-  host: "trolley.proxy.rlwy.net",
-  user: "root",
-  password: "tHEvmLXjFLgWVeLwTDbikGGTuDVcJqRK",
-  database: "railway",
-  port: 50385,
+  host: "31.97.136.214",
+  user: "u569522830_codemasters408",
+  password: "Codem@sters123",
+  database: "lasacacias",
+  port: 3306,
   dateStrings: true,
   timezone: "-06:00",
   waitForConnections: true, // Espera si se supera el límite
