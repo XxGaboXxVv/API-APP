@@ -3424,9 +3424,9 @@ app.post("/confirmar_visita", async (req, res) => {
     connection = await mysqlPool.getConnection();
 
     const [rows] = await connection.query(
-      `SELECT u.EMAIL 
+      `SELECT u.ID_USUARIO, u.EMAIL 
        FROM TBL_MS_USUARIO u
-       LEFT JOIN TBL_PERSONAS p ON (p.ID_PERSONA = u.ID_PERSONA OR u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = p.NOMBRE_PERSONA COLLATE utf8mb4_general_ci)
+       LEFT JOIN TBL_PERSONAS p ON u.NOMBRE_USUARIO COLLATE utf8mb4_general_ci = p.NOMBRE_PERSONA COLLATE utf8mb4_general_ci
        WHERE u.NOMBRE_USUARIO = ? OR p.NOMBRE_PERSONA = ?
        LIMIT 1`,
       [nombreResidente, nombreResidente]
@@ -3434,6 +3434,7 @@ app.post("/confirmar_visita", async (req, res) => {
 
     if (rows.length > 0 && rows[0].EMAIL) {
       const emailResidente = rows[0].EMAIL;
+      const idUsuarioResidente = rows[0].ID_USUARIO;
       const fechaActual = moment
         .tz("America/Tegucigalpa")
         .format("DD-MM-YYYY HH:mm");
@@ -3456,6 +3457,15 @@ app.post("/confirmar_visita", async (req, res) => {
       transporter.sendMail(mailOptions, (err) => {
         if (err) console.error("Error al enviar correo de visita:", err);
       });
+
+      if (idUsuarioResidente && pushService && typeof pushService.notificarUsuario === "function") {
+        pushService.notificarUsuario(mysqlPool, idUsuarioResidente, {
+          titulo: "Ingreso de Visita Confirmado",
+          mensaje: `${nombreVisitante} ha ingresado a la residencial (${fechaActual}).`,
+          tipo: "VISITA",
+          data: { ruta: "/historial_visitas" },
+        }).catch((err) => console.error("Error al enviar push de visita:", err));
+      }
     }
 
     return res.status(200).json({ message: "Visita confirmada exitosamente" });
